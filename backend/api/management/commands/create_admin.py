@@ -13,6 +13,7 @@ class Command(BaseCommand):
                 'is_staff': True,
                 'is_superuser': True,
                 'is_admin': True,
+                'rol': 'admin',
             }
         )
         
@@ -22,6 +23,7 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS('Usuario admin creado exitosamente (admin/admin)'))
         else:
             # Actualizar el usuario existente para asegurar que tenga is_admin=True
+            admin_user.rol = 'admin'
             admin_user.is_admin = True
             admin_user.is_staff = True
             admin_user.is_superuser = True

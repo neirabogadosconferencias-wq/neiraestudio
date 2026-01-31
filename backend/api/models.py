@@ -28,14 +28,28 @@ class User(AbstractUser):
         return self.username
     
     def save(self, *args, **kwargs):
-        # Si es admin, actualizar is_admin automáticamente
-        if self.rol == 'admin':
+        """
+        Sincroniza rol/permisos sin “romper” Django Admin.
+
+        Reglas:
+        - Un superuser siempre es admin.
+        - Rol 'admin' => is_admin True + is_staff True (para acceder a /admin/)
+        - Roles 'abogado' y 'usuario' => is_admin False (por ahora)
+        """
+        # Superuser siempre debe comportarse como admin
+        if self.is_superuser:
+            self.rol = 'admin'
             self.is_admin = True
-        elif self.rol == 'usuario':
-            self.is_admin = False
-        # Si es abogado, mantener is_admin como False (por ahora)
-        elif self.rol == 'abogado':
-            self.is_admin = False
+            self.is_staff = True
+        else:
+            if self.rol == 'admin':
+                self.is_admin = True
+                # admin del sistema debería poder entrar a Django admin
+                self.is_staff = True
+            elif self.rol in ('abogado', 'usuario'):
+                self.is_admin = False
+                # No forzamos is_staff=False para no romper casos existentes;
+                # pero por defecto estos roles no deberían acceder a /admin/.
         super().save(*args, **kwargs)
 
 

@@ -12,9 +12,16 @@ class Command(BaseCommand):
                 admin_user.is_admin = True
                 admin_user.is_staff = True
                 admin_user.is_superuser = True
+                admin_user.rol = 'admin'
                 admin_user.save()
                 self.stdout.write(self.style.SUCCESS(f'Usuario admin actualizado: is_admin={admin_user.is_admin}'))
             else:
+                # Asegurar que rol también esté sincronizado
+                if admin_user.rol != 'admin':
+                    admin_user.rol = 'admin'
+                    admin_user.is_staff = True
+                    admin_user.is_superuser = True
+                    admin_user.save()
                 self.stdout.write(self.style.SUCCESS(f'Usuario admin ya tiene is_admin=True'))
             
             # Mostrar información del usuario
