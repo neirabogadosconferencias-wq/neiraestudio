@@ -4,8 +4,20 @@ from django.utils import timezone
 
 
 class User(AbstractUser):
-    """Usuario personalizado con campo is_admin"""
+    """Usuario personalizado con campo is_admin y rol"""
+    ROL_CHOICES = [
+        ('admin', 'Administrador'),
+        ('abogado', 'Abogado'),
+        ('usuario', 'Usuario'),
+    ]
+    
     is_admin = models.BooleanField(default=False, verbose_name='Es Administrador')
+    rol = models.CharField(
+        max_length=20, 
+        choices=ROL_CHOICES, 
+        default='usuario',
+        verbose_name='Rol'
+    )
     
     class Meta:
         verbose_name = 'Usuario'
@@ -14,6 +26,79 @@ class User(AbstractUser):
     
     def __str__(self):
         return self.username
+    
+    def save(self, *args, **kwargs):
+        # Si es admin, actualizar is_admin automáticamente
+        if self.rol == 'admin':
+            self.is_admin = True
+        elif self.rol == 'usuario':
+            self.is_admin = False
+        # Si es abogado, mantener is_admin como False (por ahora)
+        elif self.rol == 'abogado':
+            self.is_admin = False
+        super().save(*args, **kwargs)
+
+
+class Cliente(models.Model):
+    """Modelo para clientes del estudio"""
+    
+    nombre_completo = models.CharField(max_length=200, verbose_name='Nombre Completo')
+    dni_ruc = models.CharField(max_length=20, unique=True, verbose_name='DNI/RUC')
+    telefono = models.CharField(max_length=20, blank=True, verbose_name='Teléfono')
+    email = models.EmailField(blank=True, verbose_name='Email')
+    direccion = models.TextField(blank=True, verbose_name='Dirección')
+    notas = models.TextField(blank=True, verbose_name='Notas Adicionales')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Fecha de Creación')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Última Modificación')
+    
+    class Meta:
+        verbose_name = 'Cliente'
+        verbose_name_plural = 'Clientes'
+        ordering = ['nombre_completo']
+        indexes = [
+            models.Index(fields=['dni_ruc']),
+            models.Index(fields=['nombre_completo']),
+        ]
+    
+    def __str__(self):
+        return f"{self.nombre_completo} ({self.dni_ruc})"
+
+
+class CaseTag(models.Model):
+    """Etiquetas personalizables para expedientes"""
+    
+    nombre = models.CharField(max_length=50, unique=True, verbose_name='Nombre de Etiqueta')
+    color = models.CharField(max_length=7, default='#3B82F6', verbose_name='Color (Hex)')
+    descripcion = models.TextField(blank=True, verbose_name='Descripción')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Fecha de Creación')
+    
+    class Meta:
+        verbose_name = 'Etiqueta'
+        verbose_name_plural = 'Etiquetas'
+        ordering = ['nombre']
+    
+    def __str__(self):
+        return self.nombre
+
+
+class ActuacionTemplate(models.Model):
+    """Plantillas reutilizables para actuaciones"""
+    
+    nombre = models.CharField(max_length=100, unique=True, verbose_name='Nombre de Plantilla')
+    tipo = models.CharField(max_length=100, default='Escrito', verbose_name='Tipo')
+    descripcion_template = models.TextField(verbose_name='Plantilla de Descripción')
+    # Variables disponibles: {caratula}, {cliente}, {nro_expediente}, {juzgado}, {fecha}
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='templates_created', verbose_name='Creado por')
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name='Fecha de Creación')
+    updated_at = models.DateTimeField(auto_now=True, verbose_name='Última Modificación')
+    
+    class Meta:
+        verbose_name = 'Plantilla de Actuación'
+        verbose_name_plural = 'Plantillas de Actuaciones'
+        ordering = ['nombre']
+    
+    def __str__(self):
+        return self.nombre
 
 
 class LawCase(models.Model):
@@ -35,9 +120,11 @@ class LawCase(models.Model):
     
     # Información de partes
     abogado_responsable = models.CharField(max_length=200, blank=True, verbose_name='Abogado Responsable')
-    cliente_nombre = models.CharField(max_length=200, blank=True, verbose_name='Cliente')
+    cliente = models.ForeignKey(Cliente, on_delete=models.SET_NULL, null=True, blank=True, related_name='expedientes', verbose_name='Cliente')
+    cliente_nombre = models.CharField(max_length=200, blank=True, verbose_name='Cliente (Texto libre)')
     cliente_dni = models.CharField(max_length=20, blank=True, verbose_name='DNI/RUC Cliente')
     contraparte = models.CharField(max_length=200, blank=True, verbose_name='Contraparte')
+    etiquetas = models.ManyToManyField(CaseTag, blank=True, related_name='expedientes', verbose_name='Etiquetas')
     
     # Fechas y auditoría
     fecha_inicio = models.DateField(default=timezone.now, verbose_name='Fecha de Inicio')

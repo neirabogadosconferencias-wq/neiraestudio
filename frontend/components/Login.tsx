@@ -20,7 +20,6 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     
     try {
       const user = await api.apiLogin(username, password);
-      console.log('Login exitoso, usuario:', user);
       onLogin(user);
     } catch (err: any) {
       console.error('Error en login:', err);

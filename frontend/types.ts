@@ -12,12 +12,16 @@ export enum CasePriority {
   BAJA = 'Baja'
 }
 
+export type UserRole = 'admin' | 'abogado' | 'usuario';
+
 export interface User {
   id: string | number;
   username: string;
   password?: string;
   isAdmin?: boolean;
   is_admin?: boolean; // Compatibilidad con backend
+  rol?: UserRole;
+  rol_display?: string;
 }
 
 export interface CaseNote {
@@ -67,6 +71,38 @@ export interface CaseAlerta {
   created_at?: string;
 }
 
+export interface Cliente {
+  id: string | number;
+  nombre_completo: string;
+  dni_ruc: string;
+  telefono?: string;
+  email?: string;
+  direccion?: string;
+  notas?: string;
+  total_expedientes?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CaseTag {
+  id: string | number;
+  nombre: string;
+  color: string;
+  descripcion?: string;
+  created_at?: string;
+}
+
+export interface ActuacionTemplate {
+  id: string | number;
+  nombre: string;
+  tipo: string;
+  descripcion_template: string;
+  created_by?: string;
+  created_by_username?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface LawCase {
   id: string;
   codigo_interno: string;
@@ -76,7 +112,10 @@ export interface LawCase {
   fuero: string;
   estado: CaseStatus;
   abogado_responsable: string;
+  cliente?: Cliente;
+  cliente_id?: string | number;
   cliente_nombre: string;
+  cliente_nombre_display?: string;
   cliente_dni: string;
   contraparte: string;
   fecha_inicio: string;
@@ -92,6 +131,23 @@ export interface LawCase {
   actuaciones?: CaseActuacion[];
   alertas?: CaseAlerta[];
   notas?: CaseNote[];
+  etiquetas?: CaseTag[];
+  etiquetas_ids?: (string | number)[];
 }
 
-export type ViewState = 'dashboard' | 'cases' | 'new-case' | 'case-detail' | 'users';
+export interface DashboardStats {
+  stats: {
+    total_cases: number;
+    open_cases: number;
+    in_progress_cases: number;
+    paused_cases: number;
+    closed_cases: number;
+  };
+  stats_by_fuero: Record<string, number>;
+  stats_by_abogado: Record<string, number>;
+  cases_by_month: Array<{ mes: string; total: number }>;
+  recent_cases: LawCase[];
+  alertas: CaseAlerta[];
+}
+
+export type ViewState = 'dashboard' | 'cases' | 'new-case' | 'case-detail' | 'users' | 'calendar' | 'clientes';

@@ -5,7 +5,8 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     AuthView, CurrentUserView, DashboardView,
     UserViewSet, LawCaseViewSet,
-    CaseActuacionViewSet, CaseAlertaViewSet, CaseNoteViewSet
+    CaseActuacionViewSet, CaseAlertaViewSet, CaseNoteViewSet,
+    ClienteViewSet, CaseTagViewSet, ActuacionTemplateViewSet
 )
 
 router = DefaultRouter()
@@ -14,6 +15,9 @@ router.register(r'cases', LawCaseViewSet, basename='case')
 router.register(r'actuaciones', CaseActuacionViewSet, basename='actuacion')
 router.register(r'alertas', CaseAlertaViewSet, basename='alerta')
 router.register(r'notas', CaseNoteViewSet, basename='note')
+router.register(r'clientes', ClienteViewSet, basename='cliente')
+router.register(r'tags', CaseTagViewSet, basename='tag')
+router.register(r'actuacion-templates', ActuacionTemplateViewSet, basename='actuacion-template')
 
 urlpatterns = [
     # Autenticación

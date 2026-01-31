@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { LawCase, CaseStatus } from '../types';
+import { LawCase, CaseStatus, User } from '../types';
 
 // Define the type for case data excluding fields managed by the storage service
 type NewCaseInput = Omit<LawCase, 'id' | 'codigo_interno' | 'updatedAt' | 'actuaciones' | 'alertas' | 'notas' | 'createdBy' | 'lastModifiedBy'>;
@@ -8,9 +8,11 @@ type NewCaseInput = Omit<LawCase, 'id' | 'codigo_interno' | 'updatedAt' | 'actua
 interface CaseFormProps {
   onAdd: (newCase: NewCaseInput) => void;
   onCancel: () => void;
+  currentUser: User | null;
 }
 
-const CaseForm: React.FC<CaseFormProps> = ({ onAdd, onCancel }) => {
+const CaseForm: React.FC<CaseFormProps> = ({ onAdd, onCancel, currentUser }) => {
+  const isAdmin = currentUser?.isAdmin || currentUser?.is_admin || false;
   const [formData, setFormData] = useState({
     caratula: '',
     nro_expediente: '',
@@ -74,12 +76,21 @@ const CaseForm: React.FC<CaseFormProps> = ({ onAdd, onCancel }) => {
           </div>
 
           <div className="space-y-1">
-            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Abogado Responsable</label>
+            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+              Abogado Responsable
+              {!isAdmin && <span className="text-[8px] text-slate-300 ml-2">(Solo Admin)</span>}
+            </label>
             <input 
-              className="w-full px-5 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
-              placeholder="Dr. Nombre Apellido"
+              className={`w-full px-5 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
+              placeholder={isAdmin ? "Dr. Nombre Apellido" : "Solo administradores pueden asignar"}
               value={formData.abogado_responsable}
-              onChange={(e) => setFormData({...formData, abogado_responsable: e.target.value})}
+              onChange={(e) => {
+                if (isAdmin) {
+                  setFormData({...formData, abogado_responsable: e.target.value});
+                }
+              }}
+              disabled={!isAdmin}
+              readOnly={!isAdmin}
             />
           </div>
 
@@ -129,8 +140,20 @@ const CaseForm: React.FC<CaseFormProps> = ({ onAdd, onCancel }) => {
         </div>
 
         <div className="flex flex-col md:flex-row gap-4 pt-4">
-          <button type="submit" className="flex-1 bg-black text-white font-bold py-4 rounded-2xl shadow-xl hover:bg-zinc-800 transition-all uppercase tracking-widest text-xs">Registrar Caso</button>
-          <button type="button" onClick={onCancel} className="w-full md:w-1/3 bg-slate-100 text-slate-600 font-bold py-4 rounded-2xl hover:bg-slate-200 transition-all uppercase tracking-widest text-xs">Volver</button>
+          <button 
+            type="submit" 
+            disabled={!formData.caratula.trim() || !formData.nro_expediente.trim()}
+            className="flex-1 bg-black text-white font-bold py-4 rounded-2xl shadow-xl hover:bg-zinc-800 transition-all uppercase tracking-widest text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Registrar Caso
+          </button>
+          <button 
+            type="button" 
+            onClick={onCancel} 
+            className="w-full md:w-1/3 bg-slate-100 text-slate-600 font-bold py-4 rounded-2xl hover:bg-slate-200 transition-all uppercase tracking-widest text-xs"
+          >
+            Volver
+          </button>
         </div>
       </form>
     </div>

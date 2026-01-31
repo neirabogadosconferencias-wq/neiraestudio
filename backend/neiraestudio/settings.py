@@ -81,6 +81,7 @@ DB_USER = config('DB_USER', default='')
 DB_PASSWORD = config('DB_PASSWORD', default='')
 DB_HOST = config('DB_HOST', default='')
 DB_PORT = config('DB_PORT', default='')
+DB_SSLMODE = config('DB_SSLMODE', default='')
 
 DATABASES = {
     'default': {
@@ -92,6 +93,10 @@ DATABASES = {
         'PORT': DB_PORT,
     }
 }
+
+# Soporte opcional de SSL para PostgreSQL (ej: proveedores gestionados)
+if DB_SSLMODE and DB_ENGINE == 'django.db.backends.postgresql':
+    DATABASES['default']['OPTIONS'] = {'sslmode': DB_SSLMODE}
 
 # Limpiar campos vacíos para SQLite
 if DB_ENGINE == 'django.db.backends.sqlite3':

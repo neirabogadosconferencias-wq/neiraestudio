@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Layout from './components/Layout';
 import Dashboard from './components/Dashboard';
 import CaseList from './components/CaseList';
@@ -7,8 +7,15 @@ import CaseForm from './components/CaseForm';
 import CaseDetail from './components/CaseDetail';
 import UserManagement from './components/UserManagement';
 import Login from './components/Login';
+import Toast from './components/Toast';
+import Calendar from './components/Calendar';
 import { LawCase, ViewState, User } from './types';
 import * as api from './services/apiService';
+
+interface ToastState {
+  message: string;
+  type: 'success' | 'error' | 'info';
+}
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -16,6 +23,7 @@ const App: React.FC = () => {
   const [cases, setCases] = useState<LawCase[]>([]);
   const [selectedCase, setSelectedCase] = useState<LawCase | null>(null);
   const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState<ToastState | null>(null);
 
   useEffect(() => {
     // Verificar si hay usuario autenticado al cargar
@@ -35,20 +43,22 @@ const App: React.FC = () => {
     initUser();
   }, []);
 
-  const loadCases = async () => {
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setToast({ message, type });
+  };
+
+  const loadCases = useCallback(async (filters?: Parameters<typeof api.apiGetCases>[0]) => {
     try {
-      const loadedCases = await api.apiGetCases();
-      console.log('Casos cargados:', loadedCases);
+      const loadedCases = await api.apiGetCases(filters);
       // Asegurar que siempre sea un array
       setCases(Array.isArray(loadedCases) ? loadedCases : []);
     } catch (error) {
       console.error('Error al cargar casos:', error);
       setCases([]); // En caso de error, establecer array vacío
     }
-  };
+  }, []); // Sin dependencias porque solo usa setCases que es estable
 
   const handleLogin = async (user: User) => {
-    console.log('handleLogin llamado con usuario:', user);
     setCurrentUser(user);
     setCurrentView('dashboard');
     try {
@@ -70,9 +80,10 @@ const App: React.FC = () => {
       await api.apiCreateCase(newCaseData);
       await loadCases();
       setCurrentView('cases');
-    } catch (error) {
+      showToast('Expediente creado exitosamente', 'success');
+    } catch (error: any) {
       console.error('Error al crear caso:', error);
-      alert('Error al crear el expediente. Por favor, intenta nuevamente.');
+      showToast(error?.message || 'Error al crear el expediente', 'error');
     }
   };
 
@@ -83,21 +94,26 @@ const App: React.FC = () => {
       if (selectedCase && String(selectedCase.id) === String(updatedCase.id)) {
         setSelectedCase(updated);
       }
-    } catch (error) {
+      showToast('Expediente actualizado exitosamente', 'success');
+    } catch (error: any) {
       console.error('Error al actualizar caso:', error);
-      alert('Error al actualizar el expediente. Por favor, intenta nuevamente.');
+      showToast(error?.message || 'Error al actualizar el expediente', 'error');
     }
   };
 
   const handleDeleteCase = async (id: string | number) => {
+    if (!confirm('¿Estás seguro de eliminar este expediente? Esta acción no se puede deshacer.')) {
+      return;
+    }
     try {
       await api.apiDeleteCase(String(id));
       await loadCases();
       setCurrentView('cases');
       setSelectedCase(null);
-    } catch (error) {
+      showToast('Expediente eliminado exitosamente', 'success');
+    } catch (error: any) {
       console.error('Error al eliminar caso:', error);
-      alert('Error al eliminar el expediente. Por favor, intenta nuevamente.');
+      showToast(error?.message || 'Error al eliminar el expediente', 'error');
     }
   };
 
@@ -135,9 +151,9 @@ const App: React.FC = () => {
       case 'dashboard':
         return <Dashboard cases={cases} onViewChange={setCurrentView} onSelectCase={navigateToCase} onUpdateCase={handleUpdateCase} />;
       case 'cases':
-        return <CaseList cases={cases} onSelectCase={navigateToCase} onViewChange={setCurrentView} />;
+        return <CaseList cases={cases} onSelectCase={navigateToCase} onViewChange={setCurrentView} onLoadCases={loadCases} />;
       case 'new-case':
-        return <CaseForm onAdd={handleAddCase} onCancel={() => setCurrentView('cases')} />;
+        return <CaseForm onAdd={handleAddCase} onCancel={() => setCurrentView('cases')} currentUser={currentUser} />;
       case 'case-detail':
         return selectedCase ? (
           <CaseDetail 
@@ -148,21 +164,32 @@ const App: React.FC = () => {
           />
         ) : <CaseList cases={cases} onSelectCase={navigateToCase} onViewChange={setCurrentView} />;
       case 'users':
-        return <UserManagement />;
+        return <UserManagement currentUser={currentUser} />;
+      case 'calendar':
+        return <Calendar cases={cases} onSelectCase={navigateToCase} onViewChange={setCurrentView} />;
       default:
         return <Dashboard cases={cases} onViewChange={setCurrentView} onSelectCase={navigateToCase} onUpdateCase={handleUpdateCase} />;
     }
   };
 
   return (
-    <Layout 
-      currentView={currentView} 
-      onViewChange={setCurrentView} 
-      onLogout={handleLogout}
-      currentUser={currentUser}
-    >
-      {renderView()}
-    </Layout>
+    <>
+      {toast && (
+        <Toast 
+          message={toast.message} 
+          type={toast.type} 
+          onClose={() => setToast(null)} 
+        />
+      )}
+      <Layout 
+        currentView={currentView} 
+        onViewChange={setCurrentView} 
+        onLogout={handleLogout}
+        currentUser={currentUser}
+      >
+        {renderView()}
+      </Layout>
+    </>
   );
 };
 

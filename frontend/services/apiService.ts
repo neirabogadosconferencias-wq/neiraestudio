@@ -1,4 +1,4 @@
-import { LawCase, User, CaseActuacion, CaseAlerta, CaseNote } from '../types';
+import { LawCase, User, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, DashboardStats } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
@@ -137,7 +137,6 @@ export const apiLogin = async (username: string, password: string): Promise<User
   }
 
   const data = await response.json();
-  console.log('Respuesta del login:', data);
   setTokens(data.access, data.refresh);
   // Normalizar el usuario: convertir is_admin a isAdmin y asegurar que id sea string
   const normalizedUser: User = {
@@ -145,7 +144,6 @@ export const apiLogin = async (username: string, password: string): Promise<User
     id: String(data.user.id),
     isAdmin: data.user.is_admin ?? data.user.isAdmin ?? false,
   };
-  console.log('Usuario normalizado:', normalizedUser);
   localStorage.setItem('current_user', JSON.stringify(normalizedUser));
   return normalizedUser;
 };
@@ -178,10 +176,31 @@ export const apiGetCurrentUser = async (): Promise<User | null> => {
 };
 
 // ============ EXPEDIENTES (CASES) ============
-export const apiGetCases = async (search?: string, estado?: string): Promise<LawCase[]> => {
+export const apiGetCases = async (filters?: {
+  search?: string;
+  estado?: string;
+  abogado?: string;
+  fuero?: string;
+  juzgado?: string;
+  cliente?: string | number;
+  etiqueta?: string | number;
+  fecha_inicio_desde?: string;
+  fecha_inicio_hasta?: string;
+  fecha_modificacion_desde?: string;
+  fecha_modificacion_hasta?: string;
+}): Promise<LawCase[]> => {
   const params = new URLSearchParams();
-  if (search) params.append('search', search);
-  if (estado) params.append('estado', estado);
+  if (filters?.search) params.append('search', filters.search);
+  if (filters?.estado) params.append('estado', filters.estado);
+  if (filters?.abogado) params.append('abogado', filters.abogado);
+  if (filters?.fuero) params.append('fuero', filters.fuero);
+  if (filters?.juzgado) params.append('juzgado', filters.juzgado);
+  if (filters?.cliente) params.append('cliente', String(filters.cliente));
+  if (filters?.etiqueta) params.append('etiqueta', String(filters.etiqueta));
+  if (filters?.fecha_inicio_desde) params.append('fecha_inicio_desde', filters.fecha_inicio_desde);
+  if (filters?.fecha_inicio_hasta) params.append('fecha_inicio_hasta', filters.fecha_inicio_hasta);
+  if (filters?.fecha_modificacion_desde) params.append('fecha_modificacion_desde', filters.fecha_modificacion_desde);
+  if (filters?.fecha_modificacion_hasta) params.append('fecha_modificacion_hasta', filters.fecha_modificacion_hasta);
   
   const query = params.toString() ? `?${params.toString()}` : '';
   const result = await apiRequest<any>(`/cases/${query}`);
@@ -309,27 +328,24 @@ export const apiGetUsers = async (): Promise<User[]> => {
   return [];
 };
 
-export const apiCreateUser = async (user: Omit<User, 'id'> & { password: string }): Promise<User> => {
-  try {
-    console.log('Creando usuario con datos:', { ...user, is_admin: user.isAdmin ?? user.is_admin ?? false });
-    const created = await apiRequest<any>('/users/', {
-      method: 'POST',
-      body: JSON.stringify({
-        username: user.username,
-        password: user.password,
-        is_admin: user.isAdmin ?? user.is_admin ?? false,
-      }),
-    });
-    console.log('Usuario creado:', created);
-    return {
-      ...created,
-      id: String(created.id),
-      isAdmin: created.is_admin ?? created.isAdmin ?? false,
-    };
-  } catch (error: any) {
-    console.error('Error en apiCreateUser:', error);
-    throw error;
-  }
+export const apiCreateUser = async (user: Omit<User, 'id'> & { password: string; rol?: string }): Promise<User> => {
+  // Usar rol si está disponible, sino usar isAdmin como fallback
+  const rol = user.rol || (user.isAdmin || user.is_admin ? 'admin' : 'usuario');
+  
+  const created = await apiRequest<any>('/users/', {
+    method: 'POST',
+    body: JSON.stringify({
+      username: user.username,
+      password: user.password,
+      rol: rol,
+    }),
+  });
+  return {
+    ...created,
+    id: String(created.id),
+    isAdmin: created.is_admin ?? created.isAdmin ?? false,
+    rol: created.rol || (created.is_admin ? 'admin' : 'usuario'),
+  };
 };
 
 export const apiDeleteUser = async (id: string): Promise<void> => {
@@ -339,16 +355,136 @@ export const apiDeleteUser = async (id: string): Promise<void> => {
 };
 
 // ============ DASHBOARD ============
-export const apiGetDashboard = async (): Promise<{
-  stats: {
-    total_cases: number;
-    open_cases: number;
-    in_progress_cases: number;
-    paused_cases: number;
-    closed_cases: number;
-  };
-  recent_cases: LawCase[];
-  alertas: CaseAlerta[];
-}> => {
-  return apiRequest('/dashboard/');
+export const apiGetDashboard = async (): Promise<DashboardStats> => {
+  return apiRequest<DashboardStats>('/dashboard/');
+};
+
+// ============ EXPORTACIÓN ============
+export const apiExportExcel = async (filters?: {
+  search?: string;
+  estado?: string;
+  abogado?: string;
+  fuero?: string;
+  juzgado?: string;
+  cliente?: string | number;
+  etiqueta?: string | number;
+}): Promise<Blob> => {
+  const params = new URLSearchParams();
+  if (filters?.search) params.append('search', filters.search);
+  if (filters?.estado) params.append('estado', filters.estado);
+  if (filters?.abogado) params.append('abogado', filters.abogado);
+  if (filters?.fuero) params.append('fuero', filters.fuero);
+  if (filters?.juzgado) params.append('juzgado', filters.juzgado);
+  if (filters?.cliente) params.append('cliente', String(filters.cliente));
+  if (filters?.etiqueta) params.append('etiqueta', String(filters.etiqueta));
+  
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const token = getToken();
+  const url = `${API_BASE_URL}/cases/export_excel/${query}`;
+  
+  const headers: HeadersInit = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    throw new Error('Error al exportar a Excel');
+  }
+  return response.blob();
+};
+
+// ============ CLIENTES ============
+export const apiGetClientes = async (search?: string): Promise<Cliente[]> => {
+  const params = new URLSearchParams();
+  if (search) params.append('search', search);
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const result = await apiRequest<Cliente[]>(`/clientes/${query}`);
+  return Array.isArray(result) ? result : [];
+};
+
+export const apiGetCliente = async (id: string): Promise<Cliente> => {
+  return apiRequest<Cliente>(`/clientes/${id}/`);
+};
+
+export const apiCreateCliente = async (cliente: Omit<Cliente, 'id' | 'total_expedientes' | 'created_at' | 'updated_at'>): Promise<Cliente> => {
+  return apiRequest<Cliente>('/clientes/', {
+    method: 'POST',
+    body: JSON.stringify(cliente),
+  });
+};
+
+export const apiUpdateCliente = async (id: string, cliente: Partial<Cliente>): Promise<Cliente> => {
+  return apiRequest<Cliente>(`/clientes/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify(cliente),
+  });
+};
+
+export const apiDeleteCliente = async (id: string): Promise<void> => {
+  await apiRequest(`/clientes/${id}/`, {
+    method: 'DELETE',
+  });
+};
+
+// ============ ETIQUETAS ============
+export const apiGetTags = async (search?: string): Promise<CaseTag[]> => {
+  const params = new URLSearchParams();
+  if (search) params.append('search', search);
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const result = await apiRequest<CaseTag[]>(`/tags/${query}`);
+  return Array.isArray(result) ? result : [];
+};
+
+export const apiCreateTag = async (tag: Omit<CaseTag, 'id' | 'created_at'>): Promise<CaseTag> => {
+  return apiRequest<CaseTag>('/tags/', {
+    method: 'POST',
+    body: JSON.stringify(tag),
+  });
+};
+
+export const apiUpdateTag = async (id: string, tag: Partial<CaseTag>): Promise<CaseTag> => {
+  return apiRequest<CaseTag>(`/tags/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify(tag),
+  });
+};
+
+export const apiDeleteTag = async (id: string): Promise<void> => {
+  await apiRequest(`/tags/${id}/`, {
+    method: 'DELETE',
+  });
+};
+
+// ============ PLANTILLAS DE ACTUACIONES ============
+export const apiGetActuacionTemplates = async (tipo?: string): Promise<ActuacionTemplate[]> => {
+  const params = new URLSearchParams();
+  if (tipo) params.append('tipo', tipo);
+  const query = params.toString() ? `?${params.toString()}` : '';
+  const result = await apiRequest<ActuacionTemplate[]>(`/actuacion-templates/${query}`);
+  return Array.isArray(result) ? result : [];
+};
+
+export const apiGetActuacionTemplate = async (id: string): Promise<ActuacionTemplate> => {
+  return apiRequest<ActuacionTemplate>(`/actuacion-templates/${id}/`);
+};
+
+export const apiCreateActuacionTemplate = async (template: Omit<ActuacionTemplate, 'id' | 'created_by' | 'created_by_username' | 'created_at' | 'updated_at'>): Promise<ActuacionTemplate> => {
+  return apiRequest<ActuacionTemplate>('/actuacion-templates/', {
+    method: 'POST',
+    body: JSON.stringify(template),
+  });
+};
+
+export const apiUpdateActuacionTemplate = async (id: string, template: Partial<ActuacionTemplate>): Promise<ActuacionTemplate> => {
+  return apiRequest<ActuacionTemplate>(`/actuacion-templates/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify(template),
+  });
+};
+
+export const apiDeleteActuacionTemplate = async (id: string): Promise<void> => {
+  await apiRequest(`/actuacion-templates/${id}/`, {
+    method: 'DELETE',
+  });
 };

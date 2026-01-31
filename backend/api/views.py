@@ -5,13 +5,15 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.db.models import Q
 from django.utils import timezone
+from django.http import HttpResponse
 from datetime import datetime, timedelta
 
-from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote
+from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate
 from .serializers import (
     UserSerializer, UserCreateSerializer, LoginSerializer,
     LawCaseSerializer, LawCaseListSerializer,
-    CaseActuacionSerializer, CaseAlertaSerializer, CaseNoteSerializer
+    CaseActuacionSerializer, CaseAlertaSerializer, CaseNoteSerializer,
+    ClienteSerializer, CaseTagSerializer, ActuacionTemplateSerializer
 )
 
 
@@ -81,7 +83,13 @@ class UserViewSet(viewsets.ModelViewSet):
         if not self.request.user.is_admin:
             from rest_framework.exceptions import PermissionDenied
             raise PermissionDenied('Solo los administradores pueden crear usuarios')
-        serializer.save()
+        try:
+            serializer.save()
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error al crear usuario: {str(e)}, datos: {self.request.data}")
+            raise
 
 
 class LawCaseViewSet(viewsets.ModelViewSet):
@@ -95,26 +103,66 @@ class LawCaseViewSet(viewsets.ModelViewSet):
         return LawCaseSerializer
     
     def get_queryset(self):
-        queryset = LawCase.objects.select_related('created_by', 'last_modified_by').prefetch_related(
-            'actuaciones', 'alertas', 'notas'
+        queryset = LawCase.objects.select_related(
+            'created_by', 'last_modified_by', 'cliente'
+        ).prefetch_related(
+            'actuaciones', 'alertas', 'notas', 'etiquetas'
         )
         
-        # Filtros opcionales
+        # Filtros avanzados
         search = self.request.query_params.get('search', None)
         estado = self.request.query_params.get('estado', None)
+        abogado = self.request.query_params.get('abogado', None)
+        fuero = self.request.query_params.get('fuero', None)
+        juzgado = self.request.query_params.get('juzgado', None)
+        cliente_id = self.request.query_params.get('cliente', None)
+        etiqueta_id = self.request.query_params.get('etiqueta', None)
+        fecha_inicio_desde = self.request.query_params.get('fecha_inicio_desde', None)
+        fecha_inicio_hasta = self.request.query_params.get('fecha_inicio_hasta', None)
+        fecha_modificacion_desde = self.request.query_params.get('fecha_modificacion_desde', None)
+        fecha_modificacion_hasta = self.request.query_params.get('fecha_modificacion_hasta', None)
         
         if search:
             queryset = queryset.filter(
                 Q(caratula__icontains=search) |
                 Q(cliente_nombre__icontains=search) |
                 Q(nro_expediente__icontains=search) |
-                Q(codigo_interno__icontains=search)
+                Q(codigo_interno__icontains=search) |
+                Q(cliente__nombre_completo__icontains=search) |
+                Q(cliente__dni_ruc__icontains=search)
             )
         
         if estado:
             queryset = queryset.filter(estado=estado)
         
-        return queryset
+        if abogado:
+            queryset = queryset.filter(abogado_responsable__icontains=abogado)
+        
+        if fuero:
+            queryset = queryset.filter(fuero=fuero)
+        
+        if juzgado:
+            queryset = queryset.filter(juzgado__icontains=juzgado)
+        
+        if cliente_id:
+            queryset = queryset.filter(cliente_id=cliente_id)
+        
+        if etiqueta_id:
+            queryset = queryset.filter(etiquetas__id=etiqueta_id)
+        
+        if fecha_inicio_desde:
+            queryset = queryset.filter(fecha_inicio__gte=fecha_inicio_desde)
+        
+        if fecha_inicio_hasta:
+            queryset = queryset.filter(fecha_inicio__lte=fecha_inicio_hasta)
+        
+        if fecha_modificacion_desde:
+            queryset = queryset.filter(updated_at__gte=fecha_modificacion_desde)
+        
+        if fecha_modificacion_hasta:
+            queryset = queryset.filter(updated_at__lte=fecha_modificacion_hasta)
+        
+        return queryset.distinct()
     
     def perform_create(self, serializer):
         """Generar código interno automáticamente"""
@@ -139,6 +187,10 @@ class LawCaseViewSet(viewsets.ModelViewSet):
         if serializer.is_valid():
             serializer.save(caso=caso, created_by=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # Log de errores para debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error al crear actuación: {serializer.errors}, datos recibidos: {request.data}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['post'])
@@ -160,6 +212,78 @@ class LawCaseViewSet(viewsets.ModelViewSet):
             serializer.save(caso=caso, created_by=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=False, methods=['get'])
+    def export_excel(self, request):
+        """Exportar expedientes a Excel"""
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment
+        except ImportError:
+            return Response(
+                {'error': 'openpyxl no está instalado. Ejecuta: pip install openpyxl'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+        
+        queryset = self.get_queryset()
+        
+        # Crear workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Expedientes"
+        
+        # Estilos
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=11)
+        center_alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Encabezados
+        headers = [
+            "Código Interno", "Carátula", "Nro. Expediente", "Juzgado", "Fuero",
+            "Estado", "Cliente", "DNI/RUC", "Abogado Responsable", "Contraparte",
+            "Fecha Inicio", "Última Modificación", "Creado por", "Modificado por"
+        ]
+        
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_num, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = center_alignment
+        
+        # Datos
+        for row_num, caso in enumerate(queryset, 2):
+            cliente_nombre = caso.cliente.nombre_completo if caso.cliente else caso.cliente_nombre
+            cliente_dni = caso.cliente.dni_ruc if caso.cliente else caso.cliente_dni
+            
+            ws.cell(row=row_num, column=1, value=caso.codigo_interno)
+            ws.cell(row=row_num, column=2, value=caso.caratula)
+            ws.cell(row=row_num, column=3, value=caso.nro_expediente)
+            ws.cell(row=row_num, column=4, value=caso.juzgado)
+            ws.cell(row=row_num, column=5, value=caso.fuero)
+            ws.cell(row=row_num, column=6, value=caso.estado)
+            ws.cell(row=row_num, column=7, value=cliente_nombre)
+            ws.cell(row=row_num, column=8, value=cliente_dni)
+            ws.cell(row=row_num, column=9, value=caso.abogado_responsable)
+            ws.cell(row=row_num, column=10, value=caso.contraparte)
+            ws.cell(row=row_num, column=11, value=caso.fecha_inicio.strftime('%Y-%m-%d') if caso.fecha_inicio else '')
+            ws.cell(row=row_num, column=12, value=caso.updated_at.strftime('%Y-%m-%d %H:%M') if caso.updated_at else '')
+            ws.cell(row=row_num, column=13, value=caso.created_by.username if caso.created_by else '')
+            ws.cell(row=row_num, column=14, value=caso.last_modified_by.username if caso.last_modified_by else '')
+        
+        # Ajustar ancho de columnas
+        column_widths = [18, 40, 18, 25, 12, 12, 30, 15, 25, 30, 12, 18, 15, 15]
+        for col_num, width in enumerate(column_widths, 1):
+            ws.column_dimensions[chr(64 + col_num)].width = width
+        
+        # Preparar respuesta
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        filename = f"Expedientes_Estudio_Neira_Trujillo_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        
+        wb.save(response)
+        return response
 
 
 class CaseActuacionViewSet(viewsets.ModelViewSet):
@@ -230,6 +354,55 @@ class CaseNoteViewSet(viewsets.ModelViewSet):
         return queryset
 
 
+class ClienteViewSet(viewsets.ModelViewSet):
+    """ViewSet para gestión de clientes"""
+    queryset = Cliente.objects.all()
+    serializer_class = ClienteSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        search = self.request.query_params.get('search', None)
+        if search:
+            queryset = queryset.filter(
+                Q(nombre_completo__icontains=search) |
+                Q(dni_ruc__icontains=search) |
+                Q(email__icontains=search)
+            )
+        return queryset
+
+
+class CaseTagViewSet(viewsets.ModelViewSet):
+    """ViewSet para gestión de etiquetas"""
+    queryset = CaseTag.objects.all()
+    serializer_class = CaseTagSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        search = self.request.query_params.get('search', None)
+        if search:
+            queryset = queryset.filter(nombre__icontains=search)
+        return queryset
+
+
+class ActuacionTemplateViewSet(viewsets.ModelViewSet):
+    """ViewSet para gestión de plantillas de actuaciones"""
+    queryset = ActuacionTemplate.objects.all()
+    serializer_class = ActuacionTemplateSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        tipo = self.request.query_params.get('tipo', None)
+        if tipo:
+            queryset = queryset.filter(tipo=tipo)
+        return queryset
+
+
 class DashboardView(APIView):
     """Vista para datos del dashboard"""
     permission_classes = [permissions.IsAuthenticated]
@@ -247,14 +420,43 @@ class DashboardView(APIView):
             'closed_cases': cases.filter(estado=LawCase.CaseStatus.CLOSED).count(),
         }
         
+        # Estadísticas por fuero
+        stats_by_fuero = {}
+        for fuero in ['Civil', 'Comercial', 'Penal', 'Laboral', 'Familia']:
+            stats_by_fuero[fuero] = cases.filter(fuero=fuero).count()
+        
+        # Estadísticas por abogado
+        abogados = cases.exclude(abogado_responsable='').values_list('abogado_responsable', flat=True).distinct()
+        stats_by_abogado = {}
+        for abogado in abogados:
+            stats_by_abogado[abogado] = cases.filter(abogado_responsable=abogado).count()
+        
+        # Casos por mes (últimos 12 meses)
+        from django.db.models import Count
+        from django.utils import timezone
+        from datetime import timedelta
+        cases_by_month = []
+        for i in range(12):
+            month_start = timezone.now().replace(day=1) - timedelta(days=30*i)
+            month_end = month_start + timedelta(days=30)
+            count = cases.filter(created_at__gte=month_start, created_at__lt=month_end).count()
+            cases_by_month.append({
+                'mes': month_start.strftime('%Y-%m'),
+                'total': count
+            })
+        cases_by_month.reverse()
+        
         # Obtener todas las alertas
         all_alertas = CaseAlerta.objects.select_related('caso', 'created_by', 'completed_by').all()
         
         # Últimos casos actualizados
-        recent_cases = LawCase.objects.select_related('created_by', 'last_modified_by').order_by('-updated_at')[:5]
+        recent_cases = LawCase.objects.select_related('created_by', 'last_modified_by', 'cliente').prefetch_related('etiquetas').order_by('-updated_at')[:5]
         
         return Response({
             'stats': stats,
+            'stats_by_fuero': stats_by_fuero,
+            'stats_by_abogado': stats_by_abogado,
+            'cases_by_month': cases_by_month,
             'recent_cases': LawCaseListSerializer(recent_cases, many=True).data,
             'alertas': CaseAlertaSerializer(all_alertas, many=True).data
         })

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { LawCase, CaseStatus, CasePriority, ViewState, User } from '../types';
+import { LawCase, CaseStatus, CasePriority, ViewState, User, DashboardStats } from '../types';
 import * as api from '../services/apiService';
 
 interface DashboardProps {
@@ -13,16 +13,28 @@ interface DashboardProps {
 const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase, onUpdateCase }) => {
   const now = new Date();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [dashboardStats, setDashboardStats] = useState<DashboardStats | null>(null);
+  const [loading, setLoading] = useState(true);
 
   // Asegurar que cases sea un array
   const casesArray = Array.isArray(cases) ? cases : [];
 
   useEffect(() => {
-    const loadUser = async () => {
-      const user = await api.apiGetCurrentUser();
-      setCurrentUser(user);
+    const loadData = async () => {
+      try {
+        const [user, stats] = await Promise.all([
+          api.apiGetCurrentUser(),
+          api.apiGetDashboard()
+        ]);
+        setCurrentUser(user);
+        setDashboardStats(stats);
+      } catch (error) {
+        console.error('Error al cargar datos del dashboard:', error);
+      } finally {
+        setLoading(false);
+      }
     };
-    loadUser();
+    loadData();
   }, []);
 
   const calculateUrgency = (fechaVencimiento: string) => {
@@ -51,7 +63,8 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
     }
   };
 
-  const allAlerts = casesArray.flatMap(c => 
+  // Usar alertas del dashboard si están disponibles, sino de los casos
+  const allAlerts = dashboardStats?.alertas || casesArray.flatMap(c => 
     (c.alertas || []).map(a => ({ ...a, caratula: c.caratula, caseObj: c }))
   );
   
@@ -60,11 +73,31 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
     return new Date(a.fecha_vencimiento).getTime() - new Date(b.fecha_vencimiento).getTime();
   });
   
-  const recentCases = [...casesArray].sort((a, b) => {
+  // Usar casos recientes del dashboard si están disponibles
+  const recentCases = dashboardStats?.recent_cases || [...casesArray].sort((a, b) => {
     const dateA = new Date(b.updated_at || b.updatedAt || '').getTime();
     const dateB = new Date(a.updated_at || a.updatedAt || '').getTime();
     return dateA - dateB;
   }).slice(0, 5);
+
+  const stats = dashboardStats?.stats || {
+    total_cases: casesArray.length,
+    open_cases: casesArray.filter(c => c.estado === CaseStatus.OPEN).length,
+    in_progress_cases: casesArray.filter(c => c.estado === CaseStatus.IN_PROGRESS).length,
+    paused_cases: casesArray.filter(c => c.estado === CaseStatus.PAUSED).length,
+    closed_cases: casesArray.filter(c => c.estado === CaseStatus.CLOSED).length,
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500 mx-auto"></div>
+          <p className="mt-4 text-slate-600">Cargando dashboard...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 animate-fadeIn">
@@ -92,6 +125,80 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
           Nuevo Expediente
         </button>
       </header>
+
+      {/* Estadísticas Rápidas */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Total</p>
+          <p className="text-3xl font-black text-slate-900">{stats.total_cases}</p>
+        </div>
+        <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100 shadow-sm">
+          <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-2">Abiertos</p>
+          <p className="text-3xl font-black text-blue-600">{stats.open_cases}</p>
+        </div>
+        <div className="bg-orange-50 p-6 rounded-2xl border border-orange-100 shadow-sm">
+          <p className="text-[10px] font-black text-orange-600 uppercase tracking-widest mb-2">En Trámite</p>
+          <p className="text-3xl font-black text-orange-600">{stats.in_progress_cases}</p>
+        </div>
+        <div className="bg-yellow-50 p-6 rounded-2xl border border-yellow-100 shadow-sm">
+          <p className="text-[10px] font-black text-yellow-600 uppercase tracking-widest mb-2">Pausados</p>
+          <p className="text-3xl font-black text-yellow-600">{stats.paused_cases}</p>
+        </div>
+        <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 shadow-sm">
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Cerrados</p>
+          <p className="text-3xl font-black text-slate-600">{stats.closed_cases}</p>
+        </div>
+      </div>
+
+      {/* Gráficos y Estadísticas */}
+      {dashboardStats && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* Gráfico por Fuero */}
+          {dashboardStats.stats_by_fuero && Object.keys(dashboardStats.stats_by_fuero).length > 0 && (
+            <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+              <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest mb-4">Casos por Fuero</h3>
+              <div className="space-y-3">
+                {Object.entries(dashboardStats.stats_by_fuero).map(([fuero, count]) => {
+                  const total = Object.values(dashboardStats.stats_by_fuero).reduce((a, b) => a + b, 0);
+                  const percentage = total > 0 ? (count / total) * 100 : 0;
+                  return (
+                    <div key={fuero}>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-xs font-bold text-slate-700">{fuero}</span>
+                        <span className="text-xs font-black text-slate-900">{count}</span>
+                      </div>
+                      <div className="w-full bg-slate-100 rounded-full h-2">
+                        <div
+                          className="bg-orange-500 h-2 rounded-full transition-all"
+                          style={{ width: `${percentage}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Gráfico por Abogado */}
+          {dashboardStats.stats_by_abogado && Object.keys(dashboardStats.stats_by_abogado).length > 0 && (
+            <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+              <h3 className="text-sm font-black text-slate-900 uppercase tracking-widest mb-4">Casos por Abogado</h3>
+              <div className="space-y-2">
+                {Object.entries(dashboardStats.stats_by_abogado)
+                  .sort(([, a], [, b]) => b - a)
+                  .slice(0, 5)
+                  .map(([abogado, count]) => (
+                    <div key={abogado} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg">
+                      <span className="text-xs font-bold text-slate-700 truncate flex-1">{abogado || 'Sin asignar'}</span>
+                      <span className="text-xs font-black text-orange-600 bg-orange-50 px-2 py-1 rounded">{count}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-1 space-y-6">
@@ -121,13 +228,13 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
                       <p className="text-[10px] text-slate-400 font-mono font-bold uppercase tracking-tighter">{alerta.fecha_vencimiento} | {alerta.hora || '--:--'}</p>
                       <p className="text-[8px] text-slate-300 font-black uppercase truncate max-w-[80px]">{alerta.caratula}</p>
                     </div>
-                    {alerta.cumplida && alerta.completedBy && (
+                    {alerta.cumplida && (alerta.completed_by_username || alerta.completedBy) && (
                       <div className="mt-3 pt-3 border-t border-slate-100 flex items-center gap-2">
                         <div className="w-4 h-4 rounded-full bg-green-500 flex items-center justify-center">
                           <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"/></svg>
                         </div>
                         <p className="text-[8px] font-black text-green-600 uppercase italic">
-                          Acción de @{alerta.completedBy}
+                          Acción de @{alerta.completed_by_username || alerta.completedBy || 'sistema'}
                         </p>
                       </div>
                     )}
@@ -173,7 +280,12 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
                        </div>
                     </td>
                     <td className="px-8 py-6">
-                       <p className="text-[10px] text-slate-400 font-mono font-bold uppercase tracking-tighter">{new Date(c.updatedAt).toLocaleDateString()} <br/> <span className="text-slate-300">{new Date(c.updatedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span></p>
+                       <p className="text-[10px] text-slate-400 font-mono font-bold uppercase tracking-tighter">
+                         {new Date(c.updated_at || c.updatedAt || c.created_at || Date.now()).toLocaleDateString()} <br/> 
+                         <span className="text-slate-300">
+                           {new Date(c.updated_at || c.updatedAt || c.created_at || Date.now()).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                         </span>
+                       </p>
                     </td>
                     <td className="px-8 py-6 text-right">
                       <button className="bg-black text-white px-6 py-2.5 rounded-2xl text-[9px] font-black uppercase tracking-widest transition-all shadow-lg hover:bg-orange-600 hover:shadow-orange-200">Ver Ficha</button>
