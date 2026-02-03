@@ -1,6 +1,7 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { LawCase, CaseStatus, User } from '../types';
+import * as api from '../services/apiService';
 
 // Define the type for case data excluding fields managed by the storage service
 type NewCaseInput = Omit<LawCase, 'id' | 'codigo_interno' | 'updatedAt' | 'actuaciones' | 'alertas' | 'notas' | 'createdBy' | 'lastModifiedBy'>;
@@ -13,11 +14,14 @@ interface CaseFormProps {
 
 const CaseForm: React.FC<CaseFormProps> = ({ onAdd, onCancel, currentUser }) => {
   const isAdmin = currentUser?.isAdmin || currentUser?.is_admin || false;
+  const [abogados, setAbogados] = useState<User[]>([]);
+  const [submitting, setSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     caratula: '',
     nro_expediente: '',
     juzgado: '',
     fuero: 'Civil',
+    fueroOtro: '',
     estado: CaseStatus.OPEN,
     abogado_responsable: '',
     cliente_nombre: '',
@@ -25,21 +29,37 @@ const CaseForm: React.FC<CaseFormProps> = ({ onAdd, onCancel, currentUser }) => 
     contraparte: ''
   });
 
+  useEffect(() => {
+    if (!isAdmin) return;
+    api.apiGetUsers().then((users) => {
+      const abogadosList = users.filter((u) => u.rol === 'abogado');
+      setAbogados(abogadosList);
+    }).catch(() => setAbogados([]));
+  }, [isAdmin]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     if (!formData.caratula || !formData.nro_expediente) {
       alert("La Carátula y el Nro. de Expediente son campos obligatorios.");
       return;
     }
 
+    setSubmitting(true);
     try {
+      const fueroFinal = formData.fuero === 'Otro' ? (formData.fueroOtro?.trim() || 'Otro') : formData.fuero;
+      const { fueroOtro: _omit, ...rest } = formData;
       const newCaseData: NewCaseInput = {
-        ...formData,
+        ...rest,
+        fuero: fueroFinal,
         fecha_inicio: new Date().toISOString().split('T')[0] // Formato YYYY-MM-DD
       };
       await onAdd(newCaseData);
     } catch (error) {
       console.error('Error al crear caso:', error);
+      setSubmitting(false);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -76,22 +96,43 @@ const CaseForm: React.FC<CaseFormProps> = ({ onAdd, onCancel, currentUser }) => 
           </div>
 
           <div className="space-y-1">
+            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Juzgado / Sala</label>
+            <input 
+              className="w-full px-5 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+              placeholder="Ej: Juzgado Civil 1ª Instancia"
+              value={formData.juzgado}
+              onChange={(e) => setFormData({...formData, juzgado: e.target.value})}
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Contraparte</label>
+            <input 
+              className="w-full px-5 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none"
+              placeholder="Nombre de la contraparte"
+              value={formData.contraparte}
+              onChange={(e) => setFormData({...formData, contraparte: e.target.value})}
+            />
+          </div>
+
+          <div className="space-y-1">
             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
               Abogado Responsable
               {!isAdmin && <span className="text-[8px] text-slate-300 ml-2">(Solo Admin)</span>}
             </label>
-            <input 
+            <select
               className={`w-full px-5 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
-              placeholder={isAdmin ? "Dr. Nombre Apellido" : "Solo administradores pueden asignar"}
               value={formData.abogado_responsable}
               onChange={(e) => {
-                if (isAdmin) {
-                  setFormData({...formData, abogado_responsable: e.target.value});
-                }
+                if (isAdmin) setFormData({...formData, abogado_responsable: e.target.value});
               }}
               disabled={!isAdmin}
-              readOnly={!isAdmin}
-            />
+            >
+              <option value="">Sin asignar</option>
+              {abogados.map((u) => (
+                <option key={String(u.id)} value={u.username}>{u.username}</option>
+              ))}
+            </select>
           </div>
 
           <div className="space-y-1">
@@ -124,7 +165,17 @@ const CaseForm: React.FC<CaseFormProps> = ({ onAdd, onCancel, currentUser }) => 
               <option value="Penal">Penal</option>
               <option value="Laboral">Laboral</option>
               <option value="Familia">Familia</option>
+              <option value="Otro">Otro</option>
             </select>
+            {formData.fuero === 'Otro' && (
+              <input
+                type="text"
+                className="w-full mt-2 px-5 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:ring-2 focus:ring-orange-500 outline-none placeholder-slate-400"
+                placeholder="Especificar fuero o jurisdicción"
+                value={formData.fueroOtro}
+                onChange={(e) => setFormData({...formData, fueroOtro: e.target.value})}
+              />
+            )}
           </div>
 
           <div className="space-y-1">
@@ -142,15 +193,23 @@ const CaseForm: React.FC<CaseFormProps> = ({ onAdd, onCancel, currentUser }) => 
         <div className="flex flex-col md:flex-row gap-4 pt-4">
           <button 
             type="submit" 
-            disabled={!formData.caratula.trim() || !formData.nro_expediente.trim()}
-            className="flex-1 bg-black text-white font-bold py-4 rounded-2xl shadow-xl hover:bg-zinc-800 transition-all uppercase tracking-widest text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={submitting || !formData.caratula.trim() || !formData.nro_expediente.trim()}
+            className="flex-1 bg-black text-white font-bold py-4 rounded-2xl shadow-xl hover:bg-zinc-800 transition-all uppercase tracking-widest text-xs disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
-            Registrar Caso
+            {submitting ? (
+              <>
+                <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                Registrando...
+              </>
+            ) : (
+              'Registrar Caso'
+            )}
           </button>
           <button 
             type="button" 
             onClick={onCancel} 
-            className="w-full md:w-1/3 bg-slate-100 text-slate-600 font-bold py-4 rounded-2xl hover:bg-slate-200 transition-all uppercase tracking-widest text-xs"
+            disabled={submitting}
+            className="w-full md:w-1/3 bg-slate-100 text-slate-600 font-bold py-4 rounded-2xl hover:bg-slate-200 transition-all uppercase tracking-widest text-xs disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Volver
           </button>

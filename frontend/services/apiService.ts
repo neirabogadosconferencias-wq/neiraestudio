@@ -178,7 +178,7 @@ export const apiGetCurrentUser = async (): Promise<User | null> => {
 };
 
 // ============ EXPEDIENTES (CASES) ============
-export const apiGetCases = async (filters?: {
+export interface CasesListFilters {
   search?: string;
   estado?: string;
   abogado?: string;
@@ -190,7 +190,19 @@ export const apiGetCases = async (filters?: {
   fecha_inicio_hasta?: string;
   fecha_modificacion_desde?: string;
   fecha_modificacion_hasta?: string;
-}): Promise<LawCase[]> => {
+}
+
+export interface CasesPaginatedResponse {
+  results: LawCase[];
+  count: number;
+  next: string | null;
+  previous: string | null;
+}
+
+export const apiGetCases = async (
+  filters?: CasesListFilters,
+  page: number = 1
+): Promise<CasesPaginatedResponse> => {
   const params = new URLSearchParams();
   if (filters?.search) params.append('search', filters.search);
   if (filters?.estado) params.append('estado', filters.estado);
@@ -203,11 +215,24 @@ export const apiGetCases = async (filters?: {
   if (filters?.fecha_inicio_hasta) params.append('fecha_inicio_hasta', filters.fecha_inicio_hasta);
   if (filters?.fecha_modificacion_desde) params.append('fecha_modificacion_desde', filters.fecha_modificacion_desde);
   if (filters?.fecha_modificacion_hasta) params.append('fecha_modificacion_hasta', filters.fecha_modificacion_hasta);
+  params.append('page', String(page));
   
-  const query = params.toString() ? `?${params.toString()}` : '';
-  const result = await apiRequest<any>(`/cases/${query}`);
-  // Asegurar que siempre devolvamos un array
-  return Array.isArray(result) ? result : (result.results || result.data || []);
+  const result = await apiRequest<any>(`/cases/?${params.toString()}`);
+  // Soportar respuesta paginada { results, count } o array directo (fallback)
+  const results = Array.isArray(result?.results)
+    ? result.results
+    : Array.isArray(result)
+      ? result
+      : Array.isArray(result?.data)
+        ? result.data
+        : [];
+  const count = typeof result?.count === 'number' ? result.count : results.length;
+  return {
+    results,
+    count,
+    next: result?.next ?? null,
+    previous: result?.previous ?? null,
+  };
 };
 
 export const apiGetCase = async (id: string): Promise<LawCase> => {
@@ -316,18 +341,16 @@ export const apiDeleteNote = async (id: string): Promise<void> => {
 
 // ============ USUARIOS ============
 export const apiGetUsers = async (): Promise<User[]> => {
-  const users = await apiRequest<any[]>('/users/');
-  // Si la respuesta es un array (vacío o con datos), está bien
-  if (Array.isArray(users)) {
-    return users.map(user => ({
-      ...user,
-      id: String(user.id),
-      isAdmin: user.is_admin ?? user.isAdmin ?? false,
-      rol: user.rol || (user.is_admin ? 'admin' : 'usuario'),
-    }));
-  }
-  // Si no es un array, retornar array vacío (no lanzar error)
-  return [];
+  const data = await apiRequest<any>('/users/');
+  // El backend usa paginación: devuelve { count, next, previous, results: [...] }
+  const rawList = Array.isArray(data) ? data : (data?.results ?? []);
+  if (!Array.isArray(rawList)) return [];
+  return rawList.map((user: any) => ({
+    ...user,
+    id: String(user.id),
+    isAdmin: user.is_admin ?? user.isAdmin ?? false,
+    rol: user.rol ?? (user.is_admin ? 'admin' : 'usuario'),
+  }));
 };
 
 export const apiCreateUser = async (user: Omit<User, 'id'> & { password: string; rol?: string }): Promise<User> => {

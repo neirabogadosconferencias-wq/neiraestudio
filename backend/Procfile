@@ -1,0 +1,4 @@
+# Límite de workers = límite de conexiones a PostgreSQL.
+# Con 4 workers usamos como máximo 4 conexiones (plan típico ~5).
+# Si tu plan permite más, cambia -w 4 por -w N.
+web: gunicorn -w 4 -b 0.0.0.0:$PORT --timeout 120 neiraestudio.wsgi:application

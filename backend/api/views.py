@@ -1,5 +1,6 @@
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -92,10 +93,17 @@ class UserViewSet(viewsets.ModelViewSet):
             raise
 
 
+class CaseListPagination(PageNumberPagination):
+    page_size = 8
+    page_size_query_param = 'page_size'
+    max_page_size = 50
+
+
 class LawCaseViewSet(viewsets.ModelViewSet):
     """ViewSet para gestión de expedientes"""
     queryset = LawCase.objects.all()
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = CaseListPagination
     
     def get_serializer_class(self):
         if self.action == 'list':
@@ -108,6 +116,10 @@ class LawCaseViewSet(viewsets.ModelViewSet):
         ).prefetch_related(
             'actuaciones', 'alertas', 'notas', 'etiquetas'
         )
+        
+        # Abogados solo ven expedientes donde están asignados como responsable (por username)
+        if self.request.user.is_authenticated and getattr(self.request.user, 'rol', None) == 'abogado' and not self.request.user.is_admin:
+            queryset = queryset.filter(abogado_responsable=self.request.user.username)
         
         # Filtros avanzados
         search = self.request.query_params.get('search', None)
@@ -196,11 +208,14 @@ class LawCaseViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def add_alerta(self, request, pk=None):
         """Agregar alerta a un expediente"""
+        import logging
+        logger = logging.getLogger(__name__)
         caso = self.get_object()
         serializer = CaseAlertaSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save(caso=caso, created_by=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
+        logger.warning('add_alerta validation failed: %s', serializer.errors)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['post'])
@@ -288,12 +303,15 @@ class LawCaseViewSet(viewsets.ModelViewSet):
 
 class CaseActuacionViewSet(viewsets.ModelViewSet):
     """ViewSet para actuaciones"""
-    queryset = CaseActuacion.objects.select_related('caso', 'created_by')
+    queryset = CaseActuacion.objects.select_related('caso', 'created_by', 'last_modified_by')
     serializer_class = CaseActuacionSerializer
     permission_classes = [permissions.IsAuthenticated]
     
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
+    
+    def perform_update(self, serializer):
+        serializer.save(last_modified_by=self.request.user)
     
     def get_queryset(self):
         queryset = super().get_queryset()

@@ -21,6 +21,8 @@ const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [currentView, setCurrentView] = useState<ViewState>('dashboard');
   const [cases, setCases] = useState<LawCase[]>([]);
+  const [casesCount, setCasesCount] = useState(0);
+  const [casesPage, setCasesPage] = useState(1);
   const [selectedCase, setSelectedCase] = useState<LawCase | null>(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -50,16 +52,20 @@ const App: React.FC = () => {
     setToast({ message, type });
   };
 
-  const loadCases = useCallback(async (filters?: Parameters<typeof api.apiGetCases>[0]) => {
+  const loadCases = useCallback(async (filters?: api.CasesListFilters, page: number = 1) => {
     try {
-      const loadedCases = await api.apiGetCases(filters);
-      // Asegurar que siempre sea un array
-      setCases(Array.isArray(loadedCases) ? loadedCases : []);
-    } catch (error) {
+      const data = await api.apiGetCases(filters, page);
+      setCases(data.results ?? []);
+      setCasesCount(data.count ?? 0);
+      setCasesPage(page);
+    } catch (error: any) {
       console.error('Error al cargar casos:', error);
-      setCases([]); // En caso de error, establecer array vacío
+      setCases([]);
+      setCasesCount(0);
+      setCasesPage(1);
+      showToast(error?.message || 'No se pudieron cargar los expedientes', 'error');
     }
-  }, []); // Sin dependencias porque solo usa setCases que es estable
+  }, []);
 
   const handleLogin = async (user: User) => {
     setCurrentUser(user);
@@ -157,7 +163,16 @@ const App: React.FC = () => {
       case 'dashboard':
         return <Dashboard cases={cases} onViewChange={setCurrentView} onSelectCase={navigateToCase} onUpdateCase={handleUpdateCase} />;
       case 'cases':
-        return <CaseList cases={cases} onSelectCase={navigateToCase} onViewChange={setCurrentView} onLoadCases={loadCases} />;
+        return (
+          <CaseList
+            cases={cases}
+            casesCount={casesCount}
+            casesPage={casesPage}
+            onSelectCase={navigateToCase}
+            onViewChange={setCurrentView}
+            onLoadCases={loadCases}
+          />
+        );
       case 'new-case':
         return <CaseForm onAdd={handleAddCase} onCancel={() => setCurrentView('cases')} currentUser={currentUser} />;
       case 'case-detail':
@@ -168,7 +183,16 @@ const App: React.FC = () => {
             onBack={() => setCurrentView('cases')}
             onDelete={handleDeleteCase}
           />
-        ) : <CaseList cases={cases} onSelectCase={navigateToCase} onViewChange={setCurrentView} />;
+        ) : (
+          <CaseList
+            cases={cases}
+            casesCount={casesCount}
+            casesPage={casesPage}
+            onSelectCase={navigateToCase}
+            onViewChange={setCurrentView}
+            onLoadCases={loadCases}
+          />
+        );
       case 'users':
         return <UserManagement currentUser={currentUser} />;
       case 'calendar':

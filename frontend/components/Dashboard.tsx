@@ -59,7 +59,7 @@ const Dashboard: React.FC<DashboardProps> = ({ cases, onViewChange, onSelectCase
       });
     } catch (error) {
       console.error('Error al actualizar alerta:', error);
-      alert('Error al actualizar la alerta. Por favor, intenta nuevamente.');
+      alert('Error al actualizar la tarea/alerta. Por favor, intenta nuevamente.');
     }
   };
 

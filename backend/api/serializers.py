@@ -46,10 +46,15 @@ class LoginSerializer(serializers.Serializer):
 class CaseActuacionSerializer(serializers.ModelSerializer):
     """Serializer para actuaciones"""
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)
+    last_modified_by_username = serializers.CharField(source='last_modified_by.username', read_only=True)
     
     class Meta:
         model = CaseActuacion
-        fields = ['id', 'caso', 'fecha', 'descripcion', 'tipo', 'created_at', 'created_by', 'created_by_username']
+        fields = [
+            'id', 'caso', 'fecha', 'descripcion', 'tipo',
+            'created_at', 'created_by', 'created_by_username',
+            'updated_at', 'last_modified_by', 'last_modified_by_username'
+        ]
         read_only_fields = ['id', 'created_at', 'created_by']
         extra_kwargs = {
             'caso': {'required': False},  # Se asigna automáticamente en add_actuacion
@@ -60,15 +65,30 @@ class CaseAlertaSerializer(serializers.ModelSerializer):
     """Serializer para alertas"""
     created_by_username = serializers.CharField(source='created_by.username', read_only=True)
     completed_by_username = serializers.CharField(source='completed_by.username', read_only=True)
-    
+    hora = serializers.TimeField(required=False, allow_null=True)
+    tiempo_estimado_minutos = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+
     class Meta:
         model = CaseAlerta
         fields = [
             'id', 'caso', 'titulo', 'resumen', 'hora', 'fecha_vencimiento', 
-            'cumplida', 'prioridad', 'created_at', 'created_by', 'created_by_username',
+            'cumplida', 'prioridad', 'tiempo_estimado_minutos', 'created_at', 'created_by', 'created_by_username',
             'completed_by', 'completed_by_username', 'completed_at'
         ]
-        read_only_fields = ['id', 'created_at', 'created_by', 'completed_at', 'completed_by']
+        read_only_fields = ['id', 'caso', 'created_at', 'created_by', 'completed_at', 'completed_by']
+        extra_kwargs = {
+            'resumen': {'required': False, 'allow_blank': True},
+            'cumplida': {'required': False, 'default': False},
+        }
+
+    def to_internal_value(self, data):
+        """Aceptar hora vacía como null para evitar 400"""
+        data = dict(data) if data else {}
+        if isinstance(data.get('hora'), str) and (data['hora'] or '').strip() == '':
+            data['hora'] = None
+        if data.get('tiempo_estimado_minutos') is None or data.get('tiempo_estimado_minutos') == '':
+            data['tiempo_estimado_minutos'] = 0
+        return super().to_internal_value(data)
 
 
 class DashboardAlertaSerializer(serializers.ModelSerializer):
@@ -87,7 +107,7 @@ class DashboardAlertaSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'caso', 'case_id', 'codigo_interno', 'caratula',
             'titulo', 'resumen', 'hora', 'fecha_vencimiento',
-            'cumplida', 'prioridad', 'created_at', 'created_by', 'created_by_username',
+            'cumplida', 'prioridad', 'tiempo_estimado_minutos', 'created_at', 'created_by', 'created_by_username',
             'completed_by', 'completed_by_username', 'completed_at'
         ]
         read_only_fields = ['id', 'created_at', 'created_by', 'completed_at', 'completed_by', 'case_id', 'caratula', 'codigo_interno']
@@ -99,8 +119,8 @@ class CaseNoteSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = CaseNote
-        fields = ['id', 'caso', 'titulo', 'contenido', 'etiqueta', 'created_at', 'created_by', 'created_by_username']
-        read_only_fields = ['id', 'created_at', 'created_by']
+        fields = ['id', 'caso', 'titulo', 'resumen', 'contenido', 'etiqueta', 'created_at', 'created_by', 'created_by_username']
+        read_only_fields = ['id', 'caso', 'created_at', 'created_by']
 
 
 class ClienteSerializer(serializers.ModelSerializer):
@@ -162,8 +182,8 @@ class LawCaseSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False
     )
-    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
-    last_modified_by_username = serializers.CharField(source='last_modified_by.username', read_only=True)
+    created_by_username = serializers.SerializerMethodField()
+    last_modified_by_username = serializers.SerializerMethodField()
     
     class Meta:
         model = LawCase
@@ -175,12 +195,18 @@ class LawCaseSerializer(serializers.ModelSerializer):
             'actuaciones', 'alertas', 'notas', 'etiquetas', 'etiquetas_ids'
         ]
         read_only_fields = ['id', 'codigo_interno', 'created_at', 'updated_at', 'created_by', 'last_modified_by']
+    
+    def get_created_by_username(self, obj):
+        return obj.created_by.username if obj.created_by else None
+    
+    def get_last_modified_by_username(self, obj):
+        return obj.last_modified_by.username if obj.last_modified_by else None
 
 
 class LawCaseListSerializer(serializers.ModelSerializer):
     """Serializer simplificado para listado de expedientes"""
-    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
-    last_modified_by_username = serializers.CharField(source='last_modified_by.username', read_only=True)
+    created_by_username = serializers.SerializerMethodField()
+    last_modified_by_username = serializers.SerializerMethodField()
     cliente_nombre_display = serializers.SerializerMethodField()
     etiquetas = CaseTagSerializer(many=True, read_only=True)
     
@@ -192,6 +218,12 @@ class LawCaseListSerializer(serializers.ModelSerializer):
             'abogado_responsable', 'fecha_inicio', 'updated_at', 
             'created_by_username', 'last_modified_by_username', 'etiquetas'
         ]
+    
+    def get_created_by_username(self, obj):
+        return obj.created_by.username if obj.created_by else None
+    
+    def get_last_modified_by_username(self, obj):
+        return obj.last_modified_by.username if obj.last_modified_by else None
     
     def get_cliente_nombre_display(self, obj):
         return obj.cliente.nombre_completo if obj.cliente else obj.cliente_nombre

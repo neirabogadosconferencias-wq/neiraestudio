@@ -273,7 +273,7 @@ const Calendar: React.FC<CalendarProps> = ({ cases, onSelectCase, onViewChange }
                                 <div
                                   key={alerta.id || idx}
                                   className={`w-1.5 h-1.5 rounded-full ${alerta.cumplida ? 'bg-slate-300' : getUrgencyColor(alerta.fecha_vencimiento)}`}
-                                  title={alerta.titulo || 'Alerta'}
+                                  title={alerta.titulo || 'Tarea/Alerta'}
                                 />
                               ))}
                               {events.alerts.length > 3 && (
@@ -355,7 +355,7 @@ const Calendar: React.FC<CalendarProps> = ({ cases, onSelectCase, onViewChange }
                 {events.alerts.length > 0 && (
                   <div>
                     <h4 className="text-xs font-black text-slate-600 uppercase tracking-widest mb-2">
-                      Alertas / Plazos ({events.alerts.length})
+                      Tareas/Alertas ({events.alerts.length})
                     </h4>
                     <div className="space-y-2">
                       {events.alerts.map(alerta => {

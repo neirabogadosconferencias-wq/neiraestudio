@@ -170,6 +170,8 @@ class CaseActuacion(models.Model):
     tipo = models.CharField(max_length=100, default='Escrito', verbose_name='Tipo')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Fecha de Creación')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='actuaciones_created', verbose_name='Creado por')
+    updated_at = models.DateTimeField(auto_now=True, null=True, blank=True, verbose_name='Última modificación')
+    last_modified_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='actuaciones_modified', verbose_name='Modificado por')
     
     class Meta:
         verbose_name = 'Actuación'
@@ -195,6 +197,7 @@ class CaseAlerta(models.Model):
     fecha_vencimiento = models.DateField(verbose_name='Fecha de Vencimiento')
     cumplida = models.BooleanField(default=False, verbose_name='Cumplida')
     prioridad = models.CharField(max_length=10, choices=CasePriority.choices, default=CasePriority.MEDIA, verbose_name='Prioridad')
+    tiempo_estimado_minutos = models.PositiveIntegerField(null=True, blank=True, default=0, verbose_name='Tiempo estimado (minutos)')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Fecha de Creación')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='alertas_created', verbose_name='Creado por')
     completed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='alertas_completed', verbose_name='Completada por')
@@ -220,6 +223,7 @@ class CaseNote(models.Model):
     
     caso = models.ForeignKey(LawCase, on_delete=models.CASCADE, related_name='notas', verbose_name='Expediente')
     titulo = models.CharField(max_length=200, verbose_name='Título')
+    resumen = models.CharField(max_length=500, blank=True, verbose_name='Resumen / Descripción breve')
     contenido = models.TextField(verbose_name='Contenido')
     etiqueta = models.CharField(max_length=50, choices=NoteLabel.choices, default=NoteLabel.ESTRATEGIA, verbose_name='Etiqueta')
     created_at = models.DateTimeField(auto_now_add=True, verbose_name='Fecha de Creación')

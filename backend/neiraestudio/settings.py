@@ -86,7 +86,9 @@ DB_PASSWORD = config('DB_PASSWORD', default='')
 DB_HOST = config('DB_HOST', default='')
 DB_PORT = config('DB_PORT', default='')
 DB_SSLMODE = config('DB_SSLMODE', default='')
-DB_CONN_MAX_AGE = config('DB_CONN_MAX_AGE', default=60, cast=int)
+# Cerrar la conexión al final de cada request (0 = no reutilizar). Así no se acumulan: cada petición
+# abre, usa y cierra → el contador siempre baja. Evita "too many connections" en planes con límite.
+DB_CONN_MAX_AGE = config('DB_CONN_MAX_AGE', default=0, cast=int)
 
 DATABASES = {
     'default': {
@@ -103,6 +105,11 @@ DATABASES = {
 # Soporte opcional de SSL para PostgreSQL (ej: proveedores gestionados)
 if DB_SSLMODE and DB_ENGINE == 'django.db.backends.postgresql':
     DATABASES['default']['OPTIONS'] = {'sslmode': DB_SSLMODE}
+
+# PostgreSQL: comprobar conexión antes de usar y cerrar si está rota (Django 4.1+)
+# Ayuda a no acumular conexiones muertas y a respetar límite ~5 del plan
+if DB_ENGINE == 'django.db.backends.postgresql':
+    DATABASES['default']['CONN_HEALTH_CHECKS'] = True
 
 # Limpiar campos vacíos para SQLite
 if DB_ENGINE == 'django.db.backends.sqlite3':

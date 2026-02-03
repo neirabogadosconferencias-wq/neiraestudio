@@ -3,14 +3,18 @@ import React, { useState, useEffect } from 'react';
 import { LawCase, CaseStatus, ViewState, Cliente, CaseTag } from '../types';
 import * as api from '../services/apiService';
 
+const PAGE_SIZE = 8;
+
 interface CaseListProps {
   cases: LawCase[];
-  onSelectCase: (lawCase: LawCase) => void;
+  casesCount: number;
+  casesPage: number;
+  onSelectCase: (lawCase: LawCase) => void | Promise<void>;
   onViewChange: (view: ViewState) => void;
-  onLoadCases: (filters?: Parameters<typeof api.apiGetCases>[0]) => Promise<void>;
+  onLoadCases: (filters?: api.CasesListFilters, page?: number) => Promise<void>;
 }
 
-const CaseList: React.FC<CaseListProps> = ({ cases, onSelectCase, onViewChange, onLoadCases }) => {
+const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSelectCase, onViewChange, onLoadCases }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [abogadoFilter, setAbogadoFilter] = useState('');
@@ -23,9 +27,10 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelectCase, onViewChange, 
   const [tags, setTags] = useState<CaseTag[]>([]);
   const [loading, setLoading] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [openingCaseId, setOpeningCaseId] = useState<string | null>(null);
   
-  // Asegurar que cases sea un array
   const casesArray = Array.isArray(cases) ? cases : [];
+  const totalPages = Math.max(1, Math.ceil(casesCount / PAGE_SIZE));
 
   // Cargar clientes y tags
   useEffect(() => {
@@ -44,34 +49,36 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelectCase, onViewChange, 
     loadData();
   }, []);
 
-  // Aplicar filtros cuando cambien
+  const buildFilters = (): api.CasesListFilters | undefined => {
+    const filters: api.CasesListFilters = {};
+    if (searchTerm) filters.search = searchTerm;
+    if (statusFilter !== 'all') filters.estado = statusFilter;
+    if (abogadoFilter) filters.abogado = abogadoFilter;
+    if (fueroFilter) filters.fuero = fueroFilter;
+    if (juzgadoFilter) filters.juzgado = juzgadoFilter;
+    if (clienteFilter) filters.cliente = clienteFilter;
+    if (etiquetaFilter) filters.etiqueta = etiquetaFilter;
+    return Object.keys(filters).length > 0 ? filters : undefined;
+  };
+
+  // Aplicar filtros (con debounce para búsqueda)
   useEffect(() => {
-    const applyFilters = async () => {
+    const applyFilters = async (page: number = 1) => {
       setLoading(true);
-      const filters: Parameters<typeof api.apiGetCases>[0] = {};
-      
-      if (searchTerm) filters.search = searchTerm;
-      if (statusFilter !== 'all') filters.estado = statusFilter;
-      if (abogadoFilter) filters.abogado = abogadoFilter;
-      if (fueroFilter) filters.fuero = fueroFilter;
-      if (juzgadoFilter) filters.juzgado = juzgadoFilter;
-      if (clienteFilter) filters.cliente = clienteFilter;
-      if (etiquetaFilter) filters.etiqueta = etiquetaFilter;
-      
-      await onLoadCases(Object.keys(filters).length > 0 ? filters : undefined);
+      await onLoadCases(buildFilters(), page);
       setLoading(false);
     };
-    
-    // Debounce para búsqueda - solo si hay cambios reales
-    const hasFilters = searchTerm || statusFilter !== 'all' || abogadoFilter || fueroFilter || juzgadoFilter || clienteFilter || etiquetaFilter;
-    const timeoutId = setTimeout(() => {
-      applyFilters();
-    }, searchTerm ? 500 : 0);
-    
+    const delay = searchTerm ? 500 : 0;
+    const timeoutId = setTimeout(() => applyFilters(1), delay);
     return () => clearTimeout(timeoutId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchTerm, statusFilter, abogadoFilter, fueroFilter, juzgadoFilter, clienteFilter, etiquetaFilter]);
-  // Nota: onLoadCases está memoizado con useCallback en App.tsx, no necesita estar en dependencias
+
+  const goToPage = (page: number) => {
+    if (page < 1 || page > totalPages) return;
+    setLoading(true);
+    onLoadCases(buildFilters(), page).finally(() => setLoading(false));
+  };
 
   // Lógica de pesos para ordenamiento
   const statusWeight = {
@@ -91,16 +98,8 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelectCase, onViewChange, 
     
     try {
       setIsExporting(true);
-      const filters: Parameters<typeof api.apiExportExcel>[0] = {};
-      if (searchTerm) filters.search = searchTerm;
-      if (statusFilter !== 'all') filters.estado = statusFilter;
-      if (abogadoFilter) filters.abogado = abogadoFilter;
-      if (fueroFilter) filters.fuero = fueroFilter;
-      if (juzgadoFilter) filters.juzgado = juzgadoFilter;
-      if (clienteFilter) filters.cliente = clienteFilter;
-      if (etiquetaFilter) filters.etiqueta = etiquetaFilter;
-      
-      const blob = await api.apiExportExcel(Object.keys(filters).length > 0 ? filters : undefined);
+      const filters = buildFilters();
+      const blob = await api.apiExportExcel(filters);
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -205,6 +204,7 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelectCase, onViewChange, 
                 <option value="Penal">Penal</option>
                 <option value="Laboral">Laboral</option>
                 <option value="Familia">Familia</option>
+                <option value="Otro">Otro</option>
               </select>
             </div>
             <div>
@@ -263,21 +263,28 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelectCase, onViewChange, 
         )}
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden relative">
+        {loading && (
+          <div className="absolute inset-0 bg-white/60 z-10 flex items-center justify-center rounded-2xl">
+            <span className="animate-spin rounded-full h-8 w-8 border-2 border-orange-500 border-t-transparent" />
+          </div>
+        )}
         <div className="overflow-x-auto custom-scrollbar">
-          <table className="w-full min-w-[760px] text-left border-collapse">
+          <table className="w-full min-w-[900px] text-left border-collapse">
           <thead>
             <tr className="bg-zinc-900 text-white text-[10px] font-black uppercase tracking-widest">
               <th className="px-6 py-4">ID Interno / Exp</th>
               <th className="px-6 py-4">Carátula</th>
-              <th className="px-6 py-4">Estado Procesal</th>
+              <th className="px-6 py-4">Abogado responsable</th>
+              <th className="px-6 py-4">Fuero</th>
+              <th className="px-6 py-4">Estado</th>
               <th className="px-6 py-4 text-right">Acción</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {filteredCases.length === 0 ? (
               <tr>
-                <td colSpan={4} className="px-6 py-12 text-center">
+                <td colSpan={6} className="px-6 py-12 text-center">
                   <div className="flex flex-col items-center">
                     <svg className="w-12 h-12 text-slate-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
@@ -312,6 +319,12 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelectCase, onViewChange, 
                   )}
                 </td>
                 <td className="px-6 py-4">
+                  <p className="text-xs font-bold text-slate-700">{c.abogado_responsable || '—'}</p>
+                </td>
+                <td className="px-6 py-4">
+                  <p className="text-xs text-slate-600">{c.fuero || '—'}</p>
+                </td>
+                <td className="px-6 py-4">
                   <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${
                     c.estado === CaseStatus.CLOSED ? 'bg-zinc-100 text-zinc-500' : 'bg-orange-50 text-orange-600'
                   }`}>
@@ -320,10 +333,26 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelectCase, onViewChange, 
                 </td>
                 <td className="px-6 py-4 text-right">
                   <button 
-                    onClick={() => onSelectCase(c)}
-                    className="bg-black text-white px-4 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-orange-600 transition-all shadow-md"
+                    onClick={async () => {
+                      if (openingCaseId) return;
+                      setOpeningCaseId(String(c.id));
+                      try {
+                        await onSelectCase(c);
+                      } finally {
+                        setOpeningCaseId(null);
+                      }
+                    }}
+                    disabled={!!openingCaseId}
+                    className="bg-black text-white px-4 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-orange-600 transition-all shadow-md disabled:opacity-70 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
                   >
-                    Abrir Ficha
+                    {openingCaseId === String(c.id) ? (
+                      <>
+                        <span className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent" />
+                        Abriendo...
+                      </>
+                    ) : (
+                      'Abrir Ficha'
+                    )}
                   </button>
                 </td>
               </tr>
@@ -332,6 +361,31 @@ const CaseList: React.FC<CaseListProps> = ({ cases, onSelectCase, onViewChange, 
           </tbody>
           </table>
         </div>
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100 bg-slate-50/50">
+            <p className="text-xs font-bold text-slate-500">
+              Página {casesPage} de {totalPages} · {casesCount} expediente{casesCount !== 1 ? 's' : ''}
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => goToPage(casesPage - 1)}
+                disabled={loading || casesPage <= 1}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Anterior
+              </button>
+              <button
+                type="button"
+                onClick={() => goToPage(casesPage + 1)}
+                disabled={loading || casesPage >= totalPages}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Siguiente
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

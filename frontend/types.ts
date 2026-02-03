@@ -29,6 +29,7 @@ export interface CaseNote {
   caso_id?: string;
   caso?: string;
   titulo: string;
+  resumen?: string;
   contenido: string;
   etiqueta: string;
   fecha_creacion?: string;
@@ -49,6 +50,9 @@ export interface CaseActuacion {
   created_by?: string;
   created_by_username?: string;
   created_at?: string;
+  updated_at?: string | null;
+  last_modified_by?: string | number | null;
+  last_modified_by_username?: string | null;
 }
 
 export interface CaseAlerta {
@@ -61,6 +65,7 @@ export interface CaseAlerta {
   fecha_vencimiento: string;
   cumplida: boolean;
   prioridad: CasePriority;
+  tiempo_estimado_minutos?: number | null;
   createdBy?: string;
   created_by?: string;
   created_by_username?: string;

@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { LawCase, CaseStatus, CasePriority, CaseNote, CaseAlerta, CaseActuacion, User, CaseTag, ActuacionTemplate } from '../types';
 import * as api from '../services/apiService';
+import MiniRichEditor from './MiniRichEditor';
 
 interface CaseDetailProps {
   lawCase: LawCase;
@@ -55,24 +56,62 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
   
   // Estados para CRUD
   const [editingActId, setEditingActId] = useState<string | null>(null);
+  const [editActuacionDraft, setEditActuacionDraft] = useState<{ descripcion: string; tipo: string; fecha: string } | null>(null);
+  const [savingActuacionId, setSavingActuacionId] = useState<string | null>(null);
   const [editingAlertId, setEditingAlertId] = useState<string | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [submittingAlerta, setSubmittingAlerta] = useState(false);
 
-  const [newNote, setNewNote] = useState({ titulo: '', contenido: '', etiqueta: 'Estrategia' });
+  const [newNote, setNewNote] = useState({ titulo: '', resumen: '', contenido: '', etiqueta: 'Estrategia' });
   const [newActuacion, setNewActuacion] = useState({ descripcion: '', tipo: 'Escrito', tipoPersonalizado: '', fecha: new Date().toISOString().split('T')[0] });
-  const [newAlerta, setNewAlerta] = useState({ titulo: '', resumen: '', hora: '', fecha_vencimiento: '', prioridad: CasePriority.MEDIA });
+  const [newAlerta, setNewAlerta] = useState({ titulo: '', resumen: '', hora: '', fecha_vencimiento: '', prioridad: CasePriority.MEDIA, tiempo_estimado_minutos: 0 as number });
   const [templates, setTemplates] = useState<ActuacionTemplate[]>([]);
   const [tags, setTags] = useState<CaseTag[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<string>('');
+  const [abogados, setAbogados] = useState<User[]>([]);
+  const [actuacionFilterTipo, setActuacionFilterTipo] = useState<string>('');
+  const [actuacionOrder, setActuacionOrder] = useState<'desc' | 'asc'>('desc');
+  const [actuacionPage, setActuacionPage] = useState(1);
+
+  const isAdmin = Boolean(currentUser?.isAdmin || currentUser?.is_admin);
+
+  const ACTUACIONES_PAGE_SIZE = 5;
+  const actuacionesRaw = caseData.actuaciones || [];
+  const actuacionesSorted = [...actuacionesRaw].sort((a, b) => {
+    const dateA = a.fecha ? new Date(a.fecha).getTime() : 0;
+    const dateB = b.fecha ? new Date(b.fecha).getTime() : 0;
+    return actuacionOrder === 'desc' ? dateB - dateA : dateA - dateB;
+  });
+  const actuacionesFiltered = actuacionFilterTipo
+    ? actuacionesSorted.filter((a) => (a.tipo || '') === actuacionFilterTipo)
+    : actuacionesSorted;
+  const actuacionesTotal = actuacionesFiltered.length;
+  const actuacionesPaginated = actuacionesFiltered.slice(
+    (actuacionPage - 1) * ACTUACIONES_PAGE_SIZE,
+    actuacionPage * ACTUACIONES_PAGE_SIZE
+  );
+  const actuacionesTotalPages = Math.max(1, Math.ceil(actuacionesTotal / ACTUACIONES_PAGE_SIZE));
+
+  const tiposActuacion = Array.from(new Set(actuacionesRaw.map((a) => a.tipo).filter(Boolean))) as string[];
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    api.apiGetUsers().then((users) => {
+      setAbogados(users.filter((u) => u.rol === 'abogado'));
+    }).catch(() => setAbogados([]));
+  }, [isAdmin]);
 
   // --- LOGICA DE ACTUALIZACIÓN CENTRAL ---
   const handleUpdateField = async (field: keyof LawCase, value: any) => {
+    const previousValue = caseData[field as keyof LawCase];
+    setCaseData((prev) => ({ ...prev, [field]: value }));
     try {
       const updated = await api.apiUpdateCase(String(caseData.id), { [field]: value });
       setCaseData(updated);
       onUpdate(updated);
     } catch (error) {
       console.error('Error al actualizar:', error);
+      setCaseData((prev) => ({ ...prev, [field]: previousValue }));
       alert('Error al actualizar. Por favor, intenta nuevamente.');
     }
   };
@@ -83,6 +122,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
       alert('Por favor, completa el título y la fecha de vencimiento');
       return;
     }
+    setSubmittingAlerta(true);
     try {
       if (editingAlertId) {
         const updated = await api.apiUpdateAlerta(editingAlertId, newAlerta);
@@ -92,20 +132,30 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
         onUpdate(updatedCase);
         setEditingAlertId(null);
       } else {
-        const nueva = await api.apiCreateAlerta(String(caseData.id), newAlerta);
+        const payload = {
+          titulo: newAlerta.titulo.trim(),
+          resumen: newAlerta.resumen.trim() || '',
+          hora: newAlerta.hora?.trim() ? newAlerta.hora : null,
+          fecha_vencimiento: newAlerta.fecha_vencimiento,
+          prioridad: newAlerta.prioridad,
+          tiempo_estimado_minutos: newAlerta.tiempo_estimado_minutos || 0,
+        };
+        const nueva = await api.apiCreateAlerta(String(caseData.id), payload);
         const updatedCase = { ...caseData, alertas: [nueva, ...(caseData.alertas || [])] };
         setCaseData(updatedCase);
         onUpdate(updatedCase);
       }
-      setNewAlerta({ titulo: '', resumen: '', hora: '', fecha_vencimiento: '', prioridad: CasePriority.MEDIA });
+      setNewAlerta({ titulo: '', resumen: '', hora: '', fecha_vencimiento: '', prioridad: CasePriority.MEDIA, tiempo_estimado_minutos: 0 });
     } catch (error: any) {
       console.error('Error al guardar alerta:', error);
-      alert(error?.message || 'Error al guardar la alerta. Por favor, intenta nuevamente.');
+      alert(error?.message || 'Error al guardar la tarea/alerta. Por favor, intenta nuevamente.');
+    } finally {
+      setSubmittingAlerta(false);
     }
   };
 
   const deleteAlerta = async (id: string) => {
-    if (!confirm('¿Eliminar esta alerta? Esta acción no se puede deshacer.')) return;
+    if (!confirm('¿Eliminar esta tarea/alerta? Esta acción no se puede deshacer.')) return;
     try {
       await api.apiDeleteAlerta(String(id));
       const updatedAlertas = (caseData.alertas || []).filter(a => String(a.id) !== String(id));
@@ -114,14 +164,19 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
       onUpdate(updatedCase);
     } catch (error: any) {
       console.error('Error al eliminar alerta:', error);
-      alert(error?.message || 'Error al eliminar la alerta.');
+      alert(error?.message || 'Error al eliminar la tarea/alerta.');
     }
   };
 
   // --- CRUD DE NOTAS ---
   const addNote = async () => {
-    if (!newNote.contenido.trim() || !newNote.titulo.trim()) {
-      alert('Por favor, completa el título y el contenido de la nota');
+    const contenidoLimpio = (newNote.contenido || '').replace(/<[^>]*>/g, '').trim();
+    if (!newNote.titulo.trim()) {
+      alert('Por favor, completa el título de la nota');
+      return;
+    }
+    if (!contenidoLimpio) {
+      alert('Por favor, escribe el contenido de la nota');
       return;
     }
     if (!caseData.id) {
@@ -142,7 +197,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
         setCaseData(updatedCase);
         onUpdate(updatedCase);
       }
-      setNewNote({ titulo: '', contenido: '', etiqueta: 'Estrategia' });
+      setNewNote({ titulo: '', resumen: '', contenido: '', etiqueta: 'Estrategia' });
     } catch (error: any) {
       console.error('Error al guardar nota:', error);
       const errorMessage = error?.message || error?.detail || 'Error al guardar la nota. Por favor, intenta nuevamente.';
@@ -166,6 +221,56 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
       tipo: template.tipo,
     });
     setSelectedTemplate('');
+  };
+
+  const startEditActuacion = (act: CaseActuacion) => {
+    setEditingActId(String(act.id));
+    setEditActuacionDraft({
+      descripcion: act.descripcion || '',
+      tipo: act.tipo || 'Escrito',
+      fecha: act.fecha || new Date().toISOString().split('T')[0],
+    });
+  };
+
+  const cancelEditActuacion = () => {
+    setEditingActId(null);
+    setEditActuacionDraft(null);
+  };
+
+  const saveActuacion = async (actId: string) => {
+    if (!editActuacionDraft) return;
+    setSavingActuacionId(actId);
+    try {
+      const updated = await api.apiUpdateActuacion(actId, {
+        descripcion: editActuacionDraft.descripcion.trim(),
+        tipo: editActuacionDraft.tipo,
+        fecha: editActuacionDraft.fecha,
+      });
+      const updatedActuaciones = (caseData.actuaciones || []).map((a) =>
+        String(a.id) === String(actId) ? updated : a
+      );
+      setCaseData({ ...caseData, actuaciones: updatedActuaciones });
+      onUpdate({ ...caseData, actuaciones: updatedActuaciones });
+      setEditingActId(null);
+      setEditActuacionDraft(null);
+    } catch (error: any) {
+      console.error('Error al actualizar actuación:', error);
+      alert(error?.message || 'Error al guardar. Intenta de nuevo.');
+    } finally {
+      setSavingActuacionId(null);
+    }
+  };
+
+  const formatFecha = (dateStr: string | undefined) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    return d.toLocaleDateString('es-PE', { day: 'numeric', month: 'short', year: 'numeric' });
+  };
+
+  const formatTiempoEstimado = (minutos: number | undefined | null): string => {
+    if (minutos == null || minutos <= 0) return '—';
+    const h = Math.floor(minutos / 60);
+    return `${h} h`;
   };
 
   const addActuacion = async () => {
@@ -196,6 +301,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
       onUpdate(updatedCase);
       setNewActuacion({ descripcion: '', tipo: 'Escrito', tipoPersonalizado: '', fecha: new Date().toISOString().split('T')[0] });
       setSelectedTemplate('');
+      setActuacionPage(1);
     } catch (error: any) {
       console.error('Error al guardar actuación:', error);
       const errorMessage = error?.message || error?.detail || 'Error al guardar la actuación. Por favor, intenta nuevamente.';
@@ -257,7 +363,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
             onClick={() => setActiveTab(tab)}
             className={`flex-1 py-4 px-6 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${activeTab === tab ? 'bg-black text-white shadow-xl' : 'text-slate-400 hover:bg-slate-50'}`}
           >
-            {tab === 'notas' ? 'Biblioteca Estratégica' : tab}
+            {tab === 'notas' ? 'Biblioteca Estratégica' : tab === 'alertas' ? 'Tareas/Alertas' : tab}
           </button>
         ))}
       </nav>
@@ -380,56 +486,200 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                 </div>
               </div>
               
+              {/* Filtro, orden y paginación de actuaciones */}
+              {actuacionesRaw.length > 0 && (
+                <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col sm:flex-row gap-3 flex-wrap items-center justify-between">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Filtrar por tipo</label>
+                    <select
+                      className="px-3 py-2 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-orange-500"
+                      value={actuacionFilterTipo}
+                      onChange={(e) => {
+                        setActuacionFilterTipo(e.target.value);
+                        setActuacionPage(1);
+                      }}
+                    >
+                      <option value="">Todas</option>
+                      {['Escrito', 'Audiencia', 'Notificación', 'Varios', 'Otro'].map((t) => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                      {tiposActuacion.filter((t) => !['Escrito', 'Audiencia', 'Notificación', 'Varios', 'Otro'].includes(t)).map((t) => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Orden</label>
+                    <select
+                      className="px-3 py-2 bg-slate-50 border border-slate-100 rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-orange-500"
+                      value={actuacionOrder}
+                      onChange={(e) => {
+                        setActuacionOrder(e.target.value as 'desc' | 'asc');
+                        setActuacionPage(1);
+                      }}
+                    >
+                      <option value="desc">Más recientes primero</option>
+                      <option value="asc">Más antiguas primero</option>
+                    </select>
+                  </div>
+                  <p className="text-[10px] font-bold text-slate-500">
+                    {actuacionesTotal} actuación{actuacionesTotal !== 1 ? 'es' : ''}
+                    {actuacionesTotalPages > 1 && ` · Página ${actuacionPage} de ${actuacionesTotalPages}`}
+                  </p>
+                </div>
+              )}
+
               {/* Timeline de Actuaciones */}
               <div className="space-y-4">
-                {(caseData.actuaciones || []).length === 0 ? (
+                {actuacionesFiltered.length === 0 ? (
                   <div className="bg-white p-12 rounded-[2rem] border border-slate-100 text-center">
                     <svg className="w-16 h-16 text-slate-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
                     </svg>
-                    <p className="text-slate-400 font-bold text-sm">No hay actuaciones registradas</p>
-                    <p className="text-slate-300 text-xs mt-2">Agrega la primera actuación del expediente</p>
+                    <p className="text-slate-400 font-bold text-sm">
+                      {actuacionesRaw.length === 0 ? 'No hay actuaciones registradas' : 'Ninguna actuación coincide con el filtro'}
+                    </p>
+                    <p className="text-slate-300 text-xs mt-2">
+                      {actuacionesRaw.length === 0 ? 'Agrega la primera actuación del expediente' : 'Cambia el filtro o agrega una nueva'}
+                    </p>
                   </div>
                 ) : (
-                  (caseData.actuaciones || []).map((act, idx) => (
+                  actuacionesPaginated.map((act, idx) => (
                     <div key={act.id || idx} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm hover:border-orange-200 transition-all">
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-2xl bg-orange-100 flex items-center justify-center">
-                            <span className="text-orange-600 font-black text-xs">{act.tipo?.substring(0, 2).toUpperCase() || 'AC'}</span>
+                      {editingActId === String(act.id) && editActuacionDraft ? (
+                        <>
+                          <div className="space-y-4 mb-4">
+                            <textarea
+                              className="w-full bg-slate-50 p-4 rounded-2xl outline-none text-sm font-medium border border-slate-100 min-h-[100px] focus:ring-2 focus:ring-orange-500"
+                              placeholder="Descripción..."
+                              value={editActuacionDraft.descripcion}
+                              onChange={(e) => setEditActuacionDraft((d) => d ? { ...d, descripcion: e.target.value } : null)}
+                            />
+                            <div className="flex flex-wrap gap-3">
+                              <select
+                                className="bg-slate-50 px-4 py-2 rounded-xl text-xs font-bold border border-slate-100 outline-none focus:ring-2 focus:ring-orange-500"
+                                value={editActuacionDraft.tipo}
+                                onChange={(e) => setEditActuacionDraft((d) => d ? { ...d, tipo: e.target.value } : null)}
+                              >
+                                <option value="Escrito">Escrito</option>
+                                <option value="Audiencia">Audiencia</option>
+                                <option value="Notificación">Notificación</option>
+                                <option value="Varios">Varios</option>
+                                <option value="Otro">Otro</option>
+                              </select>
+                              <input
+                                type="date"
+                                className="bg-slate-50 px-4 py-2 rounded-xl text-xs font-bold border border-slate-100 outline-none focus:ring-2 focus:ring-orange-500"
+                                value={editActuacionDraft.fecha}
+                                onChange={(e) => setEditActuacionDraft((d) => d ? { ...d, fecha: e.target.value } : null)}
+                              />
+                            </div>
                           </div>
-                          <div>
-                            <p className="text-sm font-black text-slate-900 uppercase tracking-tight">{act.tipo || 'Actuación'}</p>
-                            <p className="text-[10px] text-slate-400 font-mono font-bold">{act.fecha || 'Sin fecha'}</p>
+                          <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                            <button
+                              type="button"
+                              onClick={cancelEditActuacion}
+                              className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 text-slate-600 hover:bg-slate-200"
+                            >
+                              Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => saveActuacion(String(act.id))}
+                              disabled={savingActuacionId === String(act.id) || !editActuacionDraft.descripcion.trim()}
+                              className="px-5 py-2 rounded-xl text-xs font-bold bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                            >
+                              {savingActuacionId === String(act.id) ? (
+                                <>
+                                  <span className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent" />
+                                  Guardando...
+                                </>
+                              ) : (
+                                'Guardar'
+                              )}
+                            </button>
                           </div>
-                        </div>
-                        <button 
-                          onClick={() => {
-                            if (confirm('¿Eliminar esta actuación?')) {
-                              api.apiDeleteActuacion(String(act.id)).then(() => {
-                                const updatedActuaciones = (caseData.actuaciones || []).filter(a => String(a.id) !== String(act.id));
-                                const updatedCase = { ...caseData, actuaciones: updatedActuaciones };
-                                setCaseData(updatedCase);
-                                onUpdate(updatedCase);
-                              }).catch(error => {
-                                console.error('Error al eliminar actuación:', error);
-                                alert('Error al eliminar la actuación');
-                              });
-                            }
-                          }}
-                          className="text-red-300 hover:text-red-500 font-black text-lg"
-                        >
-                          ×
-                        </button>
-                      </div>
-                      <p className="text-sm text-slate-700 font-medium leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-50">
-                        {act.descripcion}
-                      </p>
-                      <p className="text-[9px] text-slate-300 font-black uppercase mt-4 text-right tracking-[0.1em]">
-                        Registrado por @{act.created_by_username || act.createdBy || 'sistema'}
-                      </p>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex items-start justify-between mb-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-2xl bg-orange-100 flex items-center justify-center">
+                                <span className="text-orange-600 font-black text-xs">{act.tipo?.substring(0, 2).toUpperCase() || 'AC'}</span>
+                              </div>
+                              <div>
+                                <p className="text-sm font-black text-slate-900 uppercase tracking-tight">{act.tipo || 'Actuación'}</p>
+                                <p className="text-[10px] text-slate-400 font-mono font-bold">{act.fecha || 'Sin fecha'}</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => startEditActuacion(act)}
+                                className="text-slate-400 hover:text-orange-500 font-bold text-xs uppercase tracking-widest px-3 py-1.5 rounded-lg hover:bg-orange-50 transition-all"
+                              >
+                                Editar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (confirm('¿Eliminar esta actuación?')) {
+                                    api.apiDeleteActuacion(String(act.id)).then(() => {
+                                      const updatedActuaciones = (caseData.actuaciones || []).filter(a => String(a.id) !== String(act.id));
+                                      const updatedCase = { ...caseData, actuaciones: updatedActuaciones };
+                                      setCaseData(updatedCase);
+                                      onUpdate(updatedCase);
+                                    }).catch(error => {
+                                      console.error('Error al eliminar actuación:', error);
+                                      alert('Error al eliminar la actuación');
+                                    });
+                                  }
+                                }}
+                                className="text-red-300 hover:text-red-500 font-black text-lg"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-sm text-slate-700 font-medium leading-relaxed bg-slate-50 p-4 rounded-xl border border-slate-50">
+                            {act.descripcion}
+                          </p>
+                          <div className="mt-4 pt-3 border-t border-slate-100 space-y-1 text-right">
+                            <p className="text-[9px] text-slate-400 font-black uppercase tracking-[0.1em]">
+                              Registrado por @{act.created_by_username || act.createdBy || 'sistema'}
+                            </p>
+                            {act.last_modified_by_username && act.updated_at && (
+                              <p className="text-[9px] text-slate-500 font-bold uppercase tracking-[0.1em]">
+                                Modificado por @{act.last_modified_by_username} · {formatFecha(act.updated_at)}
+                              </p>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
                   ))
+                )}
+
+                {actuacionesTotalPages > 1 && (
+                  <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setActuacionPage((p) => Math.max(1, p - 1))}
+                      disabled={actuacionPage <= 1}
+                      className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Anterior
+                    </button>
+                    <span className="text-xs font-bold text-slate-500">
+                      Página {actuacionPage} de {actuacionesTotalPages}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setActuacionPage((p) => Math.min(actuacionesTotalPages, p + 1))}
+                      disabled={actuacionPage >= actuacionesTotalPages}
+                      className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Siguiente
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -470,15 +720,65 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                       value={newAlerta.resumen} 
                       onChange={(e) => setNewAlerta({...newAlerta, resumen: e.target.value})}
                     />
+                    <div className="flex flex-wrap items-center gap-3">
+                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Tiempo estimado (horas)</span>
+                      <input 
+                        type="number" 
+                        min={0} 
+                        max={999} 
+                        className="w-24 bg-slate-50 p-3 rounded-xl outline-none text-xs font-bold border border-slate-100" 
+                        placeholder="Ej: 2" 
+                        value={newAlerta.tiempo_estimado_minutos === 0 ? '' : Math.floor(newAlerta.tiempo_estimado_minutos / 60)}
+                        onChange={(e) => {
+                          const h = Math.max(0, parseInt(e.target.value, 10) || 0);
+                          setNewAlerta({ ...newAlerta, tiempo_estimado_minutos: h * 60 });
+                        }}
+                        title="Horas"
+                      />
+                      <span className="text-slate-400 font-bold">h</span>
+                    </div>
                     <button 
+                      type="button"
                       onClick={addAlerta} 
-                      disabled={!newAlerta.titulo.trim() || !newAlerta.fecha_vencimiento}
-                      className="w-full bg-black text-white p-4 rounded-2xl font-black text-[10px] uppercase shadow-xl hover:bg-zinc-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={!newAlerta.titulo.trim() || !newAlerta.fecha_vencimiento || submittingAlerta}
+                      className="w-full bg-black text-white p-4 rounded-2xl font-black text-[10px] uppercase shadow-xl hover:bg-zinc-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 min-h-[52px]"
                     >
-                      Registrar Plazo
+                      {submittingAlerta ? (
+                        <>
+                          <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" aria-hidden />
+                          <span>Registrando plazo…</span>
+                        </>
+                      ) : (
+                        'Registrar Plazo'
+                      )}
                     </button>
                 </div>
               </div>
+
+              {(caseData.alertas || []).length > 0 && (() => {
+                const alertas = caseData.alertas || [];
+                const totalMin = alertas.reduce((acc, al) => acc + (al.tiempo_estimado_minutos ?? 0), 0);
+                const cumplidasMin = alertas.filter((al) => al.cumplida).reduce((acc, al) => acc + (al.tiempo_estimado_minutos ?? 0), 0);
+                const pendientesMin = alertas.filter((al) => !al.cumplida).reduce((acc, al) => acc + (al.tiempo_estimado_minutos ?? 0), 0);
+                const hayAlgunTiempo = totalMin > 0 || cumplidasMin > 0 || pendientesMin > 0;
+                return hayAlgunTiempo ? (
+                  <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-3">
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-slate-100 pb-2">Resumen de tiempo estimado</p>
+                    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Total (todas)</span>
+                      <span className="text-sm font-black text-orange-600">{formatTiempoEstimado(totalMin)}</span>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Cumplido (solo tareas cumplidas)</span>
+                      <span className="text-sm font-black text-emerald-600">{formatTiempoEstimado(cumplidasMin)}</span>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Pendiente (horas por cumplir)</span>
+                      <span className="text-sm font-black text-amber-600">{formatTiempoEstimado(pendientesMin)}</span>
+                    </div>
+                  </div>
+                ) : null;
+              })()}
 
               <div className="space-y-4">
                 {(caseData.alertas || []).length === 0 ? (
@@ -486,8 +786,8 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                     <svg className="w-16 h-16 text-slate-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
                     </svg>
-                    <p className="text-slate-400 font-bold text-sm">No hay alertas programadas</p>
-                    <p className="text-slate-300 text-xs mt-2">Agrega la primera alerta o plazo</p>
+                    <p className="text-slate-400 font-bold text-sm">No hay tareas/alertas programadas</p>
+                    <p className="text-slate-300 text-xs mt-2">Agrega la primera tarea/alerta o plazo</p>
                   </div>
                 ) : (
                   (caseData.alertas || []).map(al => (
@@ -506,7 +806,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                               deleteAlerta(String(al.id));
                             }} 
                             className="text-red-300 hover:text-red-500 font-black transition-all"
-                            title="Eliminar alerta"
+                            title="Eliminar tarea/alerta"
                           >
                             ×
                           </button>
@@ -514,6 +814,11 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                     </div>
                     <p className={`text-base font-bold ${al.cumplida ? 'line-through text-slate-400' : 'text-slate-900 uppercase'}`}>{al.titulo}</p>
                     {al.resumen && <p className="text-sm text-slate-500 mt-2 font-medium bg-slate-50 p-4 rounded-2xl border border-slate-50 italic whitespace-pre-wrap">{al.resumen}</p>}
+                    {al.tiempo_estimado_minutos != null && al.tiempo_estimado_minutos > 0 && (
+                      <p className="mt-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                        Tiempo est.: {formatTiempoEstimado(al.tiempo_estimado_minutos)}
+                      </p>
+                    )}
                     <div className="mt-4 flex justify-between items-center text-[9px] font-black uppercase text-slate-300">
                       <span>Programado por @{al.created_by_username || al.createdBy || 'sistema'}</span>
                       {al.cumplida && <span>✓ {al.completed_by_username || al.completedBy || 'sistema'}</span>}
@@ -545,16 +850,28 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                       <option value="Jurisprudencia">Jurisprudencia</option>
                     </select>
                   </div>
-                  <textarea 
-                    className="w-full bg-slate-50 p-6 rounded-2xl outline-none text-sm font-medium min-h-[150px] border border-slate-100" 
-                    placeholder="Escriba el análisis detallado aquí..." 
-                    value={newNote.contenido} 
-                    onChange={(e) => setNewNote({...newNote, contenido: e.target.value})}
-                    required
-                  ></textarea>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Resumen / Descripción breve</label>
+                    <input
+                      type="text"
+                      className="w-full bg-slate-50 p-4 rounded-2xl outline-none text-sm font-medium border border-slate-100"
+                      placeholder="Resumen opcional en una línea..."
+                      value={newNote.resumen || ''}
+                      onChange={(e) => setNewNote({ ...newNote, resumen: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Contenido detallado (negrita, color, subrayado…)</label>
+                    <MiniRichEditor
+                      value={newNote.contenido}
+                      onChange={(html) => setNewNote((prev) => ({ ...prev, contenido: html }))}
+                      placeholder="Escriba el análisis detallado aquí..."
+                      minHeight="180px"
+                    />
+                  </div>
                   <button 
                     onClick={addNote} 
-                    disabled={!newNote.titulo.trim() || !newNote.contenido.trim()}
+                    disabled={!newNote.titulo.trim() || !(newNote.contenido || '').replace(/<[^>]*>/g, '').trim()}
                     className="w-full bg-black text-white p-4 rounded-2xl font-black text-[10px] uppercase shadow-xl hover:bg-zinc-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Guardar en Biblioteca
@@ -604,8 +921,15 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                           </button>
                         </div>
                       </div>
-                      <div className="text-sm text-slate-700 leading-relaxed font-medium bg-slate-50/30 p-6 rounded-[1.5rem] border border-slate-50/50 whitespace-pre-wrap">
-                        {note.contenido}
+                      {note.resumen && (
+                        <p className="text-sm text-slate-600 font-medium mb-3 pb-3 border-b border-slate-100">{note.resumen}</p>
+                      )}
+                      <div className="text-sm text-slate-700 leading-relaxed font-medium bg-slate-50/30 p-6 rounded-[1.5rem] border border-slate-50/50">
+                        {typeof note.contenido === 'string' && /<[a-z][\s\S]*>/i.test(note.contenido) ? (
+                          <div className="prose prose-sm max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0" dangerouslySetInnerHTML={{ __html: note.contenido }} />
+                        ) : (
+                          <span className="whitespace-pre-wrap">{note.contenido ?? ''}</span>
+                        )}
                       </div>
                       <p className="text-[9px] text-slate-300 font-black uppercase mt-6 text-right tracking-[0.1em]">Escrito por @{note.created_by_username || note.createdBy || 'sistema'}</p>
                     </div>
@@ -617,42 +941,66 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
 
           {activeTab === 'editar' && (
             <div className="bg-white p-10 rounded-[2rem] border border-slate-100 shadow-2xl">
-               <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest mb-8 border-b pb-4">Actualizar Datos Principales</h4>
+               <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest mb-8 border-b pb-4">Detalles del Proceso — Editar y guardar</h4>
                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                 <div className="space-y-1">
+                 <div className="md:col-span-2 space-y-1">
                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Carátula</label>
-                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-bold border border-slate-100" value={caseData.caratula} onChange={(e) => handleUpdateField('caratula', e.target.value)} />
+                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-bold border border-slate-100" value={caseData.caratula || ''} onChange={(e) => handleUpdateField('caratula', e.target.value)} />
                  </div>
                  <div className="space-y-1">
-                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nro Expediente</label>
-                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-mono border border-slate-100" value={caseData.nro_expediente} onChange={(e) => handleUpdateField('nro_expediente', e.target.value)} />
+                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nro. Expediente</label>
+                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-mono border border-slate-100" value={caseData.nro_expediente || ''} onChange={(e) => handleUpdateField('nro_expediente', e.target.value)} />
                  </div>
                  <div className="space-y-1">
-                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Juzgado / Ubicación</label>
-                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.juzgado} onChange={(e) => handleUpdateField('juzgado', e.target.value)} />
+                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Juzgado / Sala</label>
+                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.juzgado || ''} onChange={(e) => handleUpdateField('juzgado', e.target.value)} />
+                 </div>
+                 <div className="space-y-1">
+                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Contraparte</label>
+                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.contraparte || ''} onChange={(e) => handleUpdateField('contraparte', e.target.value)} />
                  </div>
                  <div className="space-y-1">
                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                     Abogado Resp.
-                     {currentUser && !(currentUser.isAdmin || currentUser.is_admin) && (
-                       <span className="text-[8px] text-slate-300 ml-2">(Solo Admin)</span>
-                     )}
+                     Abogado responsable
+                     {!isAdmin && <span className="text-[8px] text-slate-300 ml-2">(Solo Admin)</span>}
                    </label>
-                   <input 
-                     className={`w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 font-bold ${currentUser && !(currentUser.isAdmin || currentUser.is_admin) ? 'opacity-50 cursor-not-allowed' : ''}`}
-                     value={caseData.abogado_responsable}
+                   <select
+                     className={`w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 font-bold ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
+                     value={caseData.abogado_responsable || ''}
                      onChange={(e) => {
-                       if (currentUser && (currentUser.isAdmin || currentUser.is_admin)) {
-                         handleUpdateField('abogado_responsable', e.target.value);
-                       }
+                       if (isAdmin) handleUpdateField('abogado_responsable', e.target.value);
                      }}
-                     disabled={!currentUser || !(currentUser.isAdmin || currentUser.is_admin)}
-                     readOnly={!currentUser || !(currentUser.isAdmin || currentUser.is_admin)}
-                     placeholder={currentUser && !(currentUser.isAdmin || currentUser.is_admin) ? "Solo administradores pueden asignar" : ""}
-                   />
+                     disabled={!isAdmin}
+                   >
+                     <option value="">Sin asignar</option>
+                     {abogados.map((u) => (
+                       <option key={String(u.id)} value={u.username}>{u.username}</option>
+                     ))}
+                   </select>
+                 </div>
+                 <div className="space-y-1">
+                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Cliente (nombre completo)</label>
+                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.cliente_nombre || ''} onChange={(e) => handleUpdateField('cliente_nombre', e.target.value)} placeholder="Nombre del cliente" />
+                 </div>
+                 <div className="space-y-1">
+                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">DNI / RUC Cliente</label>
+                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-mono border border-slate-100" value={caseData.cliente_dni || ''} onChange={(e) => handleUpdateField('cliente_dni', e.target.value)} placeholder="DNI o RUC" />
+                 </div>
+                 <div className="space-y-1">
+                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fuero / Jurisdicción</label>
+                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.fuero || ''} onChange={(e) => handleUpdateField('fuero', e.target.value)} placeholder="Ej: Civil, Comercial..." />
+                 </div>
+                 <div className="space-y-1">
+                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Estado de tramitación</label>
+                   <select className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 font-bold" value={caseData.estado || ''} onChange={(e) => handleUpdateField('estado', e.target.value)}>
+                     {Object.values(CaseStatus).map(s => (
+                       <option key={s} value={s}>{s}</option>
+                     ))}
+                   </select>
                  </div>
                </div>
-               <button onClick={() => setActiveTab('actuaciones')} className="mt-10 bg-black text-white px-12 py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-2xl hover:bg-zinc-800 transition-all">Guardar Cambios en Ficha</button>
+               <p className="mt-6 text-[10px] text-slate-400 font-bold">Los cambios se guardan al editar cada campo. El panel izquierdo refleja los datos actualizados.</p>
+               <button type="button" onClick={() => setActiveTab('actuaciones')} className="mt-6 bg-black text-white px-12 py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-2xl hover:bg-zinc-800 transition-all">Volver a Actuaciones</button>
             </div>
           )}
         </div>
