@@ -4,18 +4,42 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
-from django.db.models import Q
+from django.db.models import Q, Prefetch, Count
 from django.utils import timezone
 from django.http import HttpResponse
 from datetime import datetime, timedelta
 
-from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate
+from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, Aviso
 from .serializers import (
-    UserSerializer, UserCreateSerializer, LoginSerializer,
-    LawCaseSerializer, LawCaseListSerializer,
-    CaseActuacionSerializer, CaseAlertaSerializer, CaseNoteSerializer, DashboardAlertaSerializer,
-    ClienteSerializer, CaseTagSerializer, ActuacionTemplateSerializer
+    UserSerializer, LawCaseSerializer, CaseActuacionSerializer,
+    CaseAlertaSerializer, CaseNoteSerializer, ClienteSerializer,
+    CaseTagSerializer, ActuacionTemplateSerializer,
+    AvisoSerializer, LawCaseListSerializer, LoginSerializer
 )
+
+
+class AvisoViewSet(viewsets.ModelViewSet):
+    queryset = Aviso.objects.filter(active=True)
+    serializer_class = AvisoSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def perform_create(self, serializer):
+        # Solo admin puede crear? Por ahora dejemos que logueado, pero en frontend restringimos.
+        # Mejor: si no es admin, error?
+        # User desire: "solo el admin pueda poner"
+        if not self.request.user.is_admin:
+             raise permissions.PermissionDenied("Solo administradores pueden publicar avisos.")
+        
+        # Desactivar anteriores? "Avisos importantes" suena a uno solo o pocos.
+        # Vamos a desactivar todos los anteriores para que solo haya UNO vigente si es lo que quiere (tipo banner)
+        # O permitir varios. El request dice "el titulo... quiero que sea mas como avisos".
+        # Vamos a permitir historial pero el endpoint get por defecto traerá el último.
+        # Para el dashboard, usaremos un @action o simplemente listaremos el último en el DashboardView.
+        serializer.save(created_by=self.request.user)
+
+    def get_queryset(self):
+        # Admin ve todos, usuario solo activos
+        return Aviso.objects.filter(active=True).order_by('-created_at')
 
 
 class IsAdminOrReadOnly(permissions.BasePermission):
@@ -94,7 +118,7 @@ class UserViewSet(viewsets.ModelViewSet):
 
 
 class CaseListPagination(PageNumberPagination):
-    page_size = 8
+    page_size = 5
     page_size_query_param = 'page_size'
     max_page_size = 50
 
@@ -111,11 +135,21 @@ class LawCaseViewSet(viewsets.ModelViewSet):
         return LawCaseSerializer
     
     def get_queryset(self):
+        # Optimización Base: Siempre cargar relaciones directas y etiquetas (usadas en listado)
         queryset = LawCase.objects.select_related(
             'created_by', 'last_modified_by', 'cliente'
-        ).prefetch_related(
-            'actuaciones', 'alertas', 'notas', 'etiquetas'
-        )
+        ).prefetch_related('etiquetas')
+
+        # Optimización Condicional: Solo cargar datos pesados (actuaciones, alertas, notas) en detalle
+        if self.action == 'retrieve':
+            queryset = queryset.prefetch_related(
+                # Traer actuaciones con sus autores ya cargados
+                Prefetch('actuaciones', queryset=CaseActuacion.objects.select_related('created_by', 'last_modified_by').order_by('-fecha', '-created_at')),
+                # Traer alertas con sus autores ya cargados
+                Prefetch('alertas', queryset=CaseAlerta.objects.select_related('created_by', 'completed_by').order_by('fecha_vencimiento', 'prioridad')),
+                # Traer notas con sus autores ya cargados
+                Prefetch('notas', queryset=CaseNote.objects.select_related('created_by').order_by('-created_at'))
+            )
         
         # Abogados solo ven expedientes donde están asignados como responsable (por username)
         if self.request.user.is_authenticated and getattr(self.request.user, 'rol', None) == 'abogado' and not self.request.user.is_admin:
@@ -297,6 +331,118 @@ class LawCaseViewSet(viewsets.ModelViewSet):
         filename = f"Expedientes_Estudio_Neira_Trujillo_{timezone.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         
+        
+        wb.save(response)
+        return response
+
+    @action(detail=True, methods=['get'])
+    def export_timeline(self, request, pk=None):
+        """Exportar timeline del caso (Actuaciones + Alertas) a Excel"""
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        except ImportError:
+            return Response(
+                {'error': 'openpyxl no está instalado'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        caso = self.get_object()
+        
+        # 1. Obtener datos
+        actuaciones = caso.actuaciones.all().select_related('created_by')
+        alertas = caso.alertas.all().select_related('created_by', 'completed_by')
+        
+        # 2. Unificar y ordenar cronológicamente
+        timeline = []
+        for act in actuaciones:
+            timeline.append({
+                'fecha': act.fecha,
+                'hora': None, 
+                'tipo_evento': 'ACTUACIÓN',
+                'tipo_detalle': act.tipo,
+                'descripcion': act.descripcion,
+                'estado': 'Realizado',
+                'responsable': act.created_by.username if act.created_by else 'Sistema',
+                'objeto': act
+            })
+            
+        for al in alertas:
+            timeline.append({
+                'fecha': al.fecha_vencimiento,
+                'hora': al.hora,
+                'tipo_evento': 'TAREA / ALERTA',
+                'tipo_detalle': al.prioridad,
+                'descripcion': f"{al.titulo} - {al.resumen}",
+                'estado': 'Cumplido' if al.cumplida else 'Pendiente',
+                'responsable': al.created_by.username if al.created_by else 'Sistema',
+                'objeto': al
+            })
+            
+        # Ordenar: primero por fecha descendente, luego por hora (si existe)
+        timeline.sort(key=lambda x: (x['fecha'] or datetime.min.date(), x['hora'] or datetime.min.time()), reverse=True)
+        
+        # 3. Generar Excel
+        wb = Workbook()
+        ws = wb.active
+        ws.title = f"Timeline {caso.codigo_interno}"
+        
+        # Estilos
+        header_fill = PatternFill(start_color="FF6600", end_color="FF6600", fill_type="solid") # Orange branding
+        header_font = Font(bold=True, color="FFFFFF", size=11)
+        center = Alignment(horizontal="center", vertical="center")
+        thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+        
+        # Info del Caso (Header)
+        ws.merge_cells('A1:F1')
+        ws['A1'] = f"TIMELINE DEL EXPEDIENTE: {caso.codigo_interno} - {caso.caratula}"
+        ws['A1'].font = Font(bold=True, size=14)
+        ws['A1'].alignment = center
+        
+        # Encabezados de tabla
+        headers = ["Fecha", "Hora", "Tipo Evento", "Detalle / Prioridad", "Descripción / Resumen", "Estado / Responsable"]
+        for col, h in enumerate(headers, 1):
+            cell = ws.cell(row=3, column=col, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = center
+            cell.border = thin_border
+            
+        # Filas
+        row = 4
+        for item in timeline:
+            ws.cell(row=row, column=1, value=item['fecha']).number_format = 'DD/MM/YYYY'
+            ws.cell(row=row, column=2, value=item['hora']).number_format = 'HH:MM'
+            ws.cell(row=row, column=3, value=item['tipo_evento'])
+            ws.cell(row=row, column=4, value=item['tipo_detalle'])
+            ws.cell(row=row, column=5, value=item['descripcion'])
+            
+            estado_resp = f"{item['estado']} ({item['responsable']})"
+            cell_estado = ws.cell(row=row, column=6, value=estado_resp)
+            
+            # Estilo condicional básico
+            if item['tipo_evento'] == 'TAREA / ALERTA' and item['estado'] == 'Pendiente':
+                cell_estado.font = Font(color="FF0000", bold=True)
+            
+            # Bordes para todas las celdas
+            for col in range(1, 7):
+                ws.cell(row=row, column=col).border = thin_border
+                
+            row += 1
+            
+        # Ajustar anchos
+        ws.column_dimensions['A'].width = 15
+        ws.column_dimensions['B'].width = 10
+        ws.column_dimensions['C'].width = 20
+        ws.column_dimensions['D'].width = 20
+        ws.column_dimensions['E'].width = 60
+        ws.column_dimensions['F'].width = 25
+        
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        filename = f"Timeline_{caso.codigo_interno}_{timezone.now().strftime('%Y%m%d')}.xlsx"
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
         wb.save(response)
         return response
 
@@ -326,6 +472,7 @@ class CaseAlertaViewSet(viewsets.ModelViewSet):
     queryset = CaseAlerta.objects.select_related('caso', 'created_by', 'completed_by')
     serializer_class = CaseAlertaSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = CaseListPagination
     
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
@@ -379,7 +526,9 @@ class ClienteViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     
     def get_queryset(self):
-        queryset = super().get_queryset()
+        # Optimización: Annotate total_expedientes en la query principal para evitar N+1 en el serializer
+        queryset = Cliente.objects.annotate(total_expedientes_count=Count('expedientes')).order_by('nombre_completo')
+        
         search = self.request.query_params.get('search', None)
         if search:
             queryset = queryset.filter(
@@ -430,8 +579,21 @@ class DashboardView(APIView):
         from django.db.models import Count
         from django.db.models.functions import TruncMonth
         from django.utils import timezone
+        from django.db.models import Q
 
-        cases = LawCase.objects.all()
+        if self.request.user.is_admin:
+            cases = LawCase.objects.all().order_by('-updated_at')
+        else:
+            # Abogados solo ven sus casos asignados (por nombre de usuario)
+            # Nota: abogado_responsable es CharField, asumimos que guarda el username o nombre.
+            # Intentaremos match parcial o exacto con username.
+            cases = LawCase.objects.filter(
+                abogado_responsable__icontains=self.request.user.username
+            ).order_by('-updated_at')
+            
+        # Aviso principal (último activo)
+        ultimo_aviso = Aviso.objects.filter(active=True).order_by('-created_at').first()
+        aviso_data = AvisoSerializer(ultimo_aviso).data if ultimo_aviso else None
 
         # ---- Estadísticas básicas (1 query) ----
         status_counts = dict(
@@ -440,7 +602,7 @@ class DashboardView(APIView):
             .values_list('estado', 'total')
         )
 
-        total_cases = sum(status_counts.values()) if status_counts else cases.count()
+        total_cases = cases.count()
         stats = {
             'total_cases': total_cases,
             'open_cases': status_counts.get(LawCase.CaseStatus.OPEN, 0),
@@ -493,7 +655,7 @@ class DashboardView(APIView):
         alertas_qs = (
             CaseAlerta.objects.select_related('caso', 'created_by', 'completed_by')
             .order_by('cumplida', 'fecha_vencimiento')
-        )[:200]
+        )[:5]
 
         # ---- Últimos casos actualizados ----
         recent_cases = (
@@ -502,11 +664,13 @@ class DashboardView(APIView):
             .order_by('-updated_at')[:5]
         )
 
-        return Response({
+        data = {
             'stats': stats,
+            'recent_cases': LawCaseSerializer(recent_cases, many=True).data,
+            'alertas': CaseAlertaSerializer(alertas_qs, many=True).data,
+            'cases_by_month': cases_by_month,
             'stats_by_fuero': stats_by_fuero,
             'stats_by_abogado': stats_by_abogado,
-            'cases_by_month': cases_by_month,
-            'recent_cases': LawCaseListSerializer(recent_cases, many=True).data,
-            'alertas': DashboardAlertaSerializer(alertas_qs, many=True).data
-        })
+            'aviso': aviso_data
+        }
+        return Response(data)

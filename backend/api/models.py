@@ -115,6 +115,23 @@ class ActuacionTemplate(models.Model):
         return self.nombre
 
 
+class Aviso(models.Model):
+    """Avisos importantes para el Dashboard (solo admin edita)"""
+    contenido = models.TextField(verbose_name='Contenido del Aviso')
+    active = models.BooleanField(default=True, verbose_name='Activo')
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='avisos_created')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Aviso'
+        verbose_name_plural = 'Avisos'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Aviso {self.id} - {self.created_at.strftime('%Y-%m-%d')}"
+
+
 class LawCase(models.Model):
     """Modelo principal para expedientes legales"""
     
@@ -138,6 +155,7 @@ class LawCase(models.Model):
     cliente_nombre = models.CharField(max_length=200, blank=True, verbose_name='Cliente (Texto libre)')
     cliente_dni = models.CharField(max_length=20, blank=True, verbose_name='DNI/RUC Cliente')
     contraparte = models.CharField(max_length=200, blank=True, verbose_name='Contraparte')
+    folder_link = models.URLField(max_length=500, blank=True, null=True, verbose_name='Link Carpeta Digital')
     etiquetas = models.ManyToManyField(CaseTag, blank=True, related_name='expedientes', verbose_name='Etiquetas')
     
     # Fechas y auditoría
@@ -155,6 +173,11 @@ class LawCase(models.Model):
             models.Index(fields=['codigo_interno']),
             models.Index(fields=['estado']),
             models.Index(fields=['-updated_at']),
+            models.Index(fields=['abogado_responsable']),
+            models.Index(fields=['cliente']),
+            # Índices para dashboard
+            models.Index(fields=['created_at']),
+            models.Index(fields=['fuero']),
         ]
     
     def __str__(self):
@@ -177,6 +200,10 @@ class CaseActuacion(models.Model):
         verbose_name = 'Actuación'
         verbose_name_plural = 'Actuaciones'
         ordering = ['-fecha', '-created_at']
+        indexes = [
+            models.Index(fields=['caso', '-fecha']),
+            models.Index(fields=['-created_at']),
+        ]
     
     def __str__(self):
         return f"{self.tipo} - {self.caso.codigo_interno}"
@@ -207,6 +234,12 @@ class CaseAlerta(models.Model):
         verbose_name = 'Alerta'
         verbose_name_plural = 'Alertas'
         ordering = ['fecha_vencimiento', 'prioridad']
+        indexes = [
+            models.Index(fields=['caso', 'fecha_vencimiento']),
+            models.Index(fields=['cumplida']),
+            # Índice compuesto para ordenamiento en dashboard
+            models.Index(fields=['cumplida', 'fecha_vencimiento']),
+        ]
     
     def __str__(self):
         return f"{self.titulo} - {self.caso.codigo_interno}"
@@ -233,6 +266,9 @@ class CaseNote(models.Model):
         verbose_name = 'Nota'
         verbose_name_plural = 'Notas'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['caso', '-created_at']),
+        ]
     
     def __str__(self):
         return f"{self.titulo} - {self.caso.codigo_interno}"

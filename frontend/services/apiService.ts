@@ -75,12 +75,12 @@ const apiRequest = async <T>(
     } catch {
       // Si no se puede parsear JSON, usar el statusText
     }
-    
+
     // Para errores 403, mensaje más específico
     if (response.status === 403) {
       throw new Error('No tienes permisos de administrador para acceder a esta sección');
     }
-    
+
     throw new Error(errorMessage || `Error ${response.status}: ${response.statusText}`);
   }
 
@@ -177,6 +177,18 @@ export const apiGetCurrentUser = async (): Promise<User | null> => {
   return null;
 };
 
+export const apiGetStoredUser = (): User | null => {
+  const stored = localStorage.getItem('current_user');
+  if (stored) {
+    try {
+      return JSON.parse(stored);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
 // ============ EXPEDIENTES (CASES) ============
 export interface CasesListFilters {
   search?: string;
@@ -216,7 +228,7 @@ export const apiGetCases = async (
   if (filters?.fecha_modificacion_desde) params.append('fecha_modificacion_desde', filters.fecha_modificacion_desde);
   if (filters?.fecha_modificacion_hasta) params.append('fecha_modificacion_hasta', filters.fecha_modificacion_hasta);
   params.append('page', String(page));
-  
+
   const result = await apiRequest<any>(`/cases/?${params.toString()}`);
   // Soportar respuesta paginada { results, count } o array directo (fallback)
   const results = Array.isArray(result?.results)
@@ -356,7 +368,7 @@ export const apiGetUsers = async (): Promise<User[]> => {
 export const apiCreateUser = async (user: Omit<User, 'id'> & { password: string; rol?: string }): Promise<User> => {
   // Usar rol si está disponible, sino usar isAdmin como fallback
   const rol = user.rol || (user.isAdmin || user.is_admin ? 'admin' : 'usuario');
-  
+
   const created = await apiRequest<any>('/users/', {
     method: 'POST',
     body: JSON.stringify({
@@ -402,19 +414,35 @@ export const apiExportExcel = async (filters?: {
   if (filters?.juzgado) params.append('juzgado', filters.juzgado);
   if (filters?.cliente) params.append('cliente', String(filters.cliente));
   if (filters?.etiqueta) params.append('etiqueta', String(filters.etiqueta));
-  
+
   const query = params.toString() ? `?${params.toString()}` : '';
   const token = getToken();
   const url = `${API_BASE_URL}/cases/export_excel/${query}`;
-  
+
   const headers: HeadersInit = {};
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
-  
+
   const response = await fetch(url, { headers });
   if (!response.ok) {
     throw new Error('Error al exportar a Excel');
+  }
+  return response.blob();
+};
+
+export const apiExportCaseTimeline = async (caseId: string): Promise<Blob> => {
+  const token = getToken();
+  const url = `${API_BASE_URL}/cases/${caseId}/export_timeline/`;
+
+  const headers: HeadersInit = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    throw new Error('Error al exportar el timeline del caso');
   }
   return response.blob();
 };
@@ -512,4 +540,20 @@ export const apiDeleteActuacionTemplate = async (id: string): Promise<void> => {
   await apiRequest(`/actuacion-templates/${id}/`, {
     method: 'DELETE',
   });
+};
+// ============ AVISOS ============
+export const apiCreateAviso = async (contenido: string): Promise<any> => {
+  return apiRequest('/avisos/', {
+    method: 'POST',
+    body: JSON.stringify({ contenido, active: true }),
+  });
+};
+
+// ============ ALERTAS ============
+export const apiGetAlertasPaginated = async (page: number): Promise<{ results: CaseAlerta[]; next: string | null }> => {
+  const result = await apiRequest<any>(`/alertas/?page_size=5&page=${page}`);
+  return {
+    results: result.results || [],
+    next: result.next,
+  };
 };

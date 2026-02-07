@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import authenticate
-from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate
+from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, Aviso
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -20,6 +20,16 @@ class UserSerializer(serializers.ModelSerializer):
             'usuario': 'Usuario',
         }
         return rol_map.get(obj.rol, 'Usuario')
+
+
+class AvisoSerializer(serializers.ModelSerializer):
+    """Serializer para Avisos"""
+    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
+
+    class Meta:
+        model = Aviso
+        fields = ['id', 'contenido', 'active', 'created_by', 'created_by_username', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
 
 
 class LoginSerializer(serializers.Serializer):
@@ -45,8 +55,8 @@ class LoginSerializer(serializers.Serializer):
 
 class CaseActuacionSerializer(serializers.ModelSerializer):
     """Serializer para actuaciones"""
-    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
-    last_modified_by_username = serializers.CharField(source='last_modified_by.username', read_only=True)
+    created_by_username = serializers.SerializerMethodField()
+    last_modified_by_username = serializers.SerializerMethodField()
     
     class Meta:
         model = CaseActuacion
@@ -59,12 +69,18 @@ class CaseActuacionSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             'caso': {'required': False},  # Se asigna automáticamente en add_actuacion
         }
+    
+    def get_created_by_username(self, obj):
+        return obj.created_by.username if obj.created_by else None
+        
+    def get_last_modified_by_username(self, obj):
+        return obj.last_modified_by.username if obj.last_modified_by else None
 
 
 class CaseAlertaSerializer(serializers.ModelSerializer):
     """Serializer para alertas"""
-    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
-    completed_by_username = serializers.CharField(source='completed_by.username', read_only=True)
+    created_by_username = serializers.SerializerMethodField()
+    completed_by_username = serializers.SerializerMethodField()
     hora = serializers.TimeField(required=False, allow_null=True)
     tiempo_estimado_minutos = serializers.IntegerField(required=False, allow_null=True, min_value=0)
 
@@ -80,6 +96,12 @@ class CaseAlertaSerializer(serializers.ModelSerializer):
             'resumen': {'required': False, 'allow_blank': True},
             'cumplida': {'required': False, 'default': False},
         }
+
+    def get_created_by_username(self, obj):
+        return obj.created_by.username if obj.created_by else None
+        
+    def get_completed_by_username(self, obj):
+        return obj.completed_by.username if obj.completed_by else None
 
     def to_internal_value(self, data):
         """Aceptar hora vacía como null para evitar 400"""
@@ -115,12 +137,15 @@ class DashboardAlertaSerializer(serializers.ModelSerializer):
 
 class CaseNoteSerializer(serializers.ModelSerializer):
     """Serializer para notas"""
-    created_by_username = serializers.CharField(source='created_by.username', read_only=True)
+    created_by_username = serializers.SerializerMethodField()
     
     class Meta:
         model = CaseNote
         fields = ['id', 'caso', 'titulo', 'resumen', 'contenido', 'etiqueta', 'created_at', 'created_by', 'created_by_username']
         read_only_fields = ['id', 'caso', 'created_at', 'created_by']
+
+    def get_created_by_username(self, obj):
+        return obj.created_by.username if obj.created_by else None
 
 
 class ClienteSerializer(serializers.ModelSerializer):
@@ -136,7 +161,8 @@ class ClienteSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at', 'total_expedientes']
     
     def get_total_expedientes(self, obj):
-        return obj.expedientes.count()
+        # Usar el valor anotado si existe, sino contar (fallback)
+        return getattr(obj, 'total_expedientes_count', obj.expedientes.count())
 
 
 class CaseTagSerializer(serializers.ModelSerializer):
@@ -190,7 +216,7 @@ class LawCaseSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'codigo_interno', 'caratula', 'nro_expediente', 'juzgado', 'fuero',
             'estado', 'abogado_responsable', 'cliente', 'cliente_id', 'cliente_nombre', 
-            'cliente_dni', 'contraparte', 'fecha_inicio', 'created_at', 'updated_at', 
+            'cliente_dni', 'contraparte', 'fecha_inicio', 'folder_link', 'created_at', 'updated_at', 
             'created_by', 'last_modified_by', 'created_by_username', 'last_modified_by_username',
             'actuaciones', 'alertas', 'notas', 'etiquetas', 'etiquetas_ids'
         ]

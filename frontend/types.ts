@@ -117,6 +117,7 @@ export interface LawCase {
   fuero: string;
   estado: CaseStatus;
   abogado_responsable: string;
+  folder_link?: string;
   cliente?: Cliente;
   cliente_id?: string | number;
   cliente_nombre: string;
@@ -140,6 +141,13 @@ export interface LawCase {
   etiquetas_ids?: (string | number)[];
 }
 
+export interface Aviso {
+  id: string | number;
+  contenido: string;
+  active: boolean;
+  created_at: string;
+}
+
 export interface DashboardStats {
   stats: {
     total_cases: number;
@@ -153,6 +161,7 @@ export interface DashboardStats {
   cases_by_month: Array<{ mes: string; total: number }>;
   recent_cases: LawCase[];
   alertas: CaseAlerta[];
+  aviso?: Aviso;
 }
 
 export type ViewState = 'dashboard' | 'cases' | 'new-case' | 'case-detail' | 'users' | 'calendar' | 'clientes';

@@ -6,13 +6,15 @@ from .views import (
     AuthView, CurrentUserView, DashboardView,
     UserViewSet, LawCaseViewSet,
     CaseActuacionViewSet, CaseAlertaViewSet, CaseNoteViewSet,
-    ClienteViewSet, CaseTagViewSet, ActuacionTemplateViewSet
+    ClienteViewSet, CaseTagViewSet, ActuacionTemplateViewSet,
+    AvisoViewSet
 )
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet, basename='user')
 router.register(r'cases', LawCaseViewSet, basename='case')
 router.register(r'actuaciones', CaseActuacionViewSet, basename='actuacion')
+router.register(r'avisos', AvisoViewSet, basename='aviso')
 router.register(r'alertas', CaseAlertaViewSet, basename='alerta')
 router.register(r'notas', CaseNoteViewSet, basename='note')
 router.register(r'clientes', ClienteViewSet, basename='cliente')

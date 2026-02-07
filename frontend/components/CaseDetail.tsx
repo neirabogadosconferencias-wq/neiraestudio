@@ -22,15 +22,27 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
   });
 
   useEffect(() => {
+    // 1. Carga optimista del usuario (Instant Admin UI)
+    const storedUser = api.apiGetStoredUser();
+    if (storedUser) {
+      setCurrentUser(storedUser);
+    }
+
     const loadData = async () => {
       try {
+        // La validación del usuario ocurre en background
         const [user, fullCase, templatesData, tagsData] = await Promise.all([
           api.apiGetCurrentUser(),
           api.apiGetCase(lawCase.id).catch(() => lawCase),
           api.apiGetActuacionTemplates(),
           api.apiGetTags()
         ]);
-        setCurrentUser(user);
+
+        // Si el usuario validado es diferente (ej: permisos cambiaron), actualizar
+        if (user && JSON.stringify(user) !== JSON.stringify(storedUser)) {
+          setCurrentUser(user);
+        }
+
         // Asegurar que los arrays estén inicializados
         setCaseData({
           ...fullCase,
@@ -42,7 +54,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
         setTags(tagsData || []);
       } catch (error) {
         console.error('Error al cargar datos del expediente:', error);
-        // Asegurar que los arrays estén inicializados incluso si falla la carga
+        // Fallback seguro
         setCaseData({
           ...lawCase,
           actuaciones: lawCase.actuaciones || [],
@@ -53,7 +65,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
     };
     loadData();
   }, [lawCase.id]);
-  
+
   // Estados para CRUD
   const [editingActId, setEditingActId] = useState<string | null>(null);
   const [editActuacionDraft, setEditActuacionDraft] = useState<{ descripcion: string; tipo: string; fecha: string } | null>(null);
@@ -61,6 +73,9 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
   const [editingAlertId, setEditingAlertId] = useState<string | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [submittingAlerta, setSubmittingAlerta] = useState(false);
+  const [submittingNote, setSubmittingNote] = useState(false);
+  const [submittingActuacion, setSubmittingActuacion] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
 
   const [newNote, setNewNote] = useState({ titulo: '', resumen: '', contenido: '', etiqueta: 'Estrategia' });
   const [newActuacion, setNewActuacion] = useState({ descripcion: '', tipo: 'Escrito', tipoPersonalizado: '', fecha: new Date().toISOString().split('T')[0] });
@@ -72,6 +87,9 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
   const [actuacionFilterTipo, setActuacionFilterTipo] = useState<string>('');
   const [actuacionOrder, setActuacionOrder] = useState<'desc' | 'asc'>('desc');
   const [actuacionPage, setActuacionPage] = useState(1);
+  // Pagination & Sort for Notes
+  const [notePage, setNotePage] = useState(1);
+  const NOTES_PAGE_SIZE = 3;
 
   const isAdmin = Boolean(currentUser?.isAdmin || currentUser?.is_admin);
 
@@ -92,13 +110,31 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
   );
   const actuacionesTotalPages = Math.max(1, Math.ceil(actuacionesTotal / ACTUACIONES_PAGE_SIZE));
 
+  // Notas Logic
+  const notesRaw = caseData.notas || [];
+  const notesSorted = [...notesRaw].sort((a, b) => {
+    // Sort by created_at desc
+    const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+    return dateB - dateA;
+  });
+  const notesTotal = notesSorted.length;
+  const notesPaginated = notesSorted.slice(
+    (notePage - 1) * NOTES_PAGE_SIZE,
+    notePage * NOTES_PAGE_SIZE
+  );
+  const notesTotalPages = Math.max(1, Math.ceil(notesTotal / NOTES_PAGE_SIZE));
+
   const tiposActuacion = Array.from(new Set(actuacionesRaw.map((a) => a.tipo).filter(Boolean))) as string[];
 
   useEffect(() => {
-    if (!isAdmin) return;
-    api.apiGetUsers().then((users) => {
-      setAbogados(users.filter((u) => u.rol === 'abogado'));
-    }).catch(() => setAbogados([]));
+    // Cargar lista de abogados solo si es admin (optimización)
+    if (isAdmin) {
+      api.apiGetUsers().then((users) => {
+        // Verificar si el componente sigue montado (cleanup safety si fuera class, acá es effect)
+        setAbogados(users.filter((u) => u.rol === 'abogado'));
+      }).catch(() => setAbogados([]));
+    }
   }, [isAdmin]);
 
   // --- LOGICA DE ACTUALIZACIÓN CENTRAL ---
@@ -115,6 +151,127 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
       alert('Error al actualizar. Por favor, intenta nuevamente.');
     }
   };
+
+  // --- LOGICA EXPEDIENTE DIGITAL ---
+  const [digitalLinkInput, setDigitalLinkInput] = useState('');
+  const [isSavingLink, setIsSavingLink] = useState(false);
+  const [showSuccessMsg, setShowSuccessMsg] = useState(false);
+
+  useEffect(() => {
+    if (caseData.folder_link) {
+      setDigitalLinkInput(caseData.folder_link);
+    }
+  }, [caseData.folder_link]);
+
+  const saveDigitalLink = async () => {
+    if (!caseData.id) return;
+    setIsSavingLink(true);
+    setShowSuccessMsg(false);
+    try {
+      await handleUpdateField('folder_link', digitalLinkInput);
+      setShowSuccessMsg(true);
+      setTimeout(() => setShowSuccessMsg(false), 3000);
+    } catch (e) {
+      console.error(e);
+      alert('Error al guardar el enlace.');
+    } finally {
+      setIsSavingLink(false);
+    }
+  };
+
+  // ... (rest of code)
+
+  // (In render)
+  // Update Tab Button Color
+  {
+    isAdmin && (
+      <button
+        onClick={() => setActiveTab('digital' as any)}
+        className={`flex-1 py-4 px-6 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${activeTab === ('digital' as any) ? 'bg-orange-500 text-white shadow-xl shadow-orange-200' : 'text-slate-400 hover:bg-slate-50'}`}
+      >
+        Expediente Digital
+      </button>
+    )
+  }
+
+  // Update Public Button Color
+  {
+    caseData.folder_link && (
+      <a
+        href={caseData.folder_link}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center justify-center gap-3 w-full bg-black hover:bg-zinc-800 text-white p-4 rounded-2xl shadow-lg shadow-slate-200 transition-all group"
+      >
+        <svg className="w-5 h-5 text-orange-500 group-hover:text-orange-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+        <div className="text-left">
+          <p className="text-[9px] font-black uppercase opacity-70 text-zinc-400">Acceso Directo</p>
+          <p className="text-xs font-black uppercase tracking-widest text-white">Abrir Carpeta Digital</p>
+        </div>
+        <svg className="w-4 h-4 ml-auto opacity-50 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+      </a>
+    )
+  }
+
+  // Update Admin Tab Content Colors and Notification
+  {
+    activeTab === ('digital' as any) && isAdmin && (
+      <div className="space-y-6 animate-fadeIn">
+        <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm text-center">
+          <div className="w-20 h-20 bg-orange-50 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg className="w-10 h-10 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" /></svg>
+          </div>
+          <h4 className="text-xl font-bold text-slate-900 mb-2">Vincular Carpeta Digital</h4>
+          <p className="text-sm text-slate-400 max-w-md mx-auto mb-8">
+            Conecta este expediente con su carpeta en la nube (Google Drive, Dropbox, OneDrive).
+            El botón de acceso aparecerá automáticamente para todos los usuarios.
+          </p>
+
+          <div className="max-w-xl mx-auto space-y-4">
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                <svg className="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                </svg>
+              </div>
+              <input
+                type="url"
+                className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all font-medium text-slate-700"
+                placeholder="https://drive.google.com/drive/folders/..."
+                value={digitalLinkInput}
+                onChange={(e) => setDigitalLinkInput(e.target.value)}
+              />
+            </div>
+
+            <button
+              onClick={saveDigitalLink}
+              disabled={isSavingLink}
+              className="w-full bg-black hover:bg-zinc-800 text-white font-bold py-4 rounded-2xl shadow-lg shadow-slate-200 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {isSavingLink ? 'Guardando...' : 'Guardar Enlace'}
+            </button>
+
+            {/* Custom Notification */}
+            {showSuccessMsg && (
+              <div className="animate-fadeIn p-4 bg-emerald-50 text-emerald-700 rounded-xl text-xs font-bold border border-emerald-100 flex items-center justify-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
+                Link del expediente actualizado correctamente.
+              </div>
+            )}
+
+            {caseData.folder_link && (
+              <div className="pt-4 mt-4 border-t border-slate-100">
+                <p className="text-xs text-slate-400 mb-2 font-bold uppercase tracking-widest">Enlace actual activo</p>
+                <a href={caseData.folder_link} target="_blank" rel="noopener noreferrer" className="text-orange-600 hover:underline text-sm break-all font-medium">
+                  {caseData.folder_link}
+                </a>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   // --- CRUD DE ALERTAS ---
   const addAlerta = async () => {
@@ -168,7 +325,6 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
     }
   };
 
-  // --- CRUD DE NOTAS ---
   const addNote = async () => {
     const contenidoLimpio = (newNote.contenido || '').replace(/<[^>]*>/g, '').trim();
     if (!newNote.titulo.trim()) {
@@ -183,6 +339,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
       alert('Error: No se puede crear la nota. El expediente no tiene ID.');
       return;
     }
+    setSubmittingNote(true);
     try {
       if (editingNoteId) {
         const updated = await api.apiUpdateNote(String(editingNoteId), newNote);
@@ -198,11 +355,32 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
         onUpdate(updatedCase);
       }
       setNewNote({ titulo: '', resumen: '', contenido: '', etiqueta: 'Estrategia' });
+      // Reset page to 1 on add/edit to ensure visibility or user preference (optional, keeping simple)
+      if (!editingNoteId) setNotePage(1);
     } catch (error: any) {
       console.error('Error al guardar nota:', error);
       const errorMessage = error?.message || error?.detail || 'Error al guardar la nota. Por favor, intenta nuevamente.';
       alert(errorMessage);
+    } finally {
+      setSubmittingNote(false);
     }
+  };
+
+  const startEditNote = (note: CaseNote) => {
+    setEditingNoteId(String(note.id));
+    setNewNote({
+      titulo: note.titulo,
+      resumen: note.resumen || '',
+      contenido: note.contenido,
+      etiqueta: note.etiqueta || 'Estrategia'
+    });
+    // Scroll to top or just let user see the form change
+    // If needed: window.scrollTo(0,0) or ref
+  };
+
+  const cancelEditNote = () => {
+    setEditingNoteId(null);
+    setNewNote({ titulo: '', resumen: '', contenido: '', etiqueta: 'Estrategia' });
   };
 
   // --- CRUD DE ACTUACIONES ---
@@ -214,7 +392,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
     descripcion = descripcion.replace(/{nro_expediente}/g, caseData.nro_expediente || '');
     descripcion = descripcion.replace(/{juzgado}/g, caseData.juzgado || '');
     descripcion = descripcion.replace(/{fecha}/g, new Date().toLocaleDateString('es-ES'));
-    
+
     setNewActuacion({
       ...newActuacion,
       descripcion,
@@ -286,6 +464,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
       alert('Error: No se puede crear la actuación. El expediente no tiene ID.');
       return;
     }
+    setSubmittingActuacion(true);
     try {
       const tipo = newActuacion.tipo === 'Otro' ? newActuacion.tipoPersonalizado : newActuacion.tipo;
       const nueva = await api.apiCreateActuacion(String(caseData.id), {
@@ -293,9 +472,9 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
         tipo: tipo || 'Escrito',
         fecha: newActuacion.fecha || new Date().toISOString().split('T')[0],
       });
-      const updatedCase = { 
-        ...caseData, 
-        actuaciones: [nueva, ...(caseData.actuaciones || [])] 
+      const updatedCase = {
+        ...caseData,
+        actuaciones: [nueva, ...(caseData.actuaciones || [])]
       };
       setCaseData(updatedCase);
       onUpdate(updatedCase);
@@ -306,6 +485,8 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
       console.error('Error al guardar actuación:', error);
       const errorMessage = error?.message || error?.detail || 'Error al guardar la actuación. Por favor, intenta nuevamente.';
       alert(errorMessage);
+    } finally {
+      setSubmittingActuacion(false);
     }
   };
 
@@ -314,7 +495,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
       <header className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-white p-8 rounded-[2rem] border border-slate-100 shadow-xl relative overflow-hidden">
         <div className="flex items-center gap-6 z-10">
           <button onClick={onBack} className="p-3 bg-slate-50 text-slate-400 hover:text-orange-500 rounded-2xl transition-all shadow-inner border border-slate-100">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7"/></svg>
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
           </button>
           <div>
             <div className="flex items-center gap-2">
@@ -340,83 +521,145 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
             </p>
           </div>
         </div>
-        <div className="flex gap-2 z-10">
-           <button onClick={() => setActiveTab('editar')} className="px-5 py-2.5 text-[10px] font-black uppercase tracking-widest text-slate-500 hover:bg-slate-50 rounded-xl border border-slate-100 transition-all">Editar Carátula</button>
-           <button 
-             onClick={() => {
-               if (confirm("¿Estás seguro de eliminar este expediente? Esta acción no se puede deshacer.")) {
-                 onDelete(String(caseData.id));
-               }
-             }} 
-             className="px-5 py-2.5 text-[10px] font-black uppercase tracking-widest text-red-400 hover:bg-red-50 rounded-xl border border-red-100 transition-all"
-           >
-             Eliminar
-           </button>
+        <div className="flex gap-2 z-10 flex-col items-end">
+          <div className="flex gap-2">
+            <button
+              onClick={async () => {
+                setIsExporting(true);
+                try {
+                  const blob = await api.apiExportCaseTimeline(String(caseData.id));
+                  const url = window.URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `Timeline_${caseData.codigo_interno}_${new Date().toISOString().split('T')[0]}.xlsx`;
+                  document.body.appendChild(a);
+                  a.click();
+                  window.URL.revokeObjectURL(url);
+                  document.body.removeChild(a);
+                } catch (e: any) {
+                  alert(e.message || 'Error al descargar timeline');
+                } finally {
+                  setIsExporting(false);
+                }
+              }}
+              disabled={isExporting}
+              className="px-5 py-2.5 text-[10px] font-black uppercase tracking-widest text-emerald-600 hover:bg-emerald-50 rounded-xl border border-emerald-100 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isExporting ? (
+                <>
+                  <span className="animate-spin rounded-full h-3 w-3 border-2 border-emerald-600 border-t-transparent"></span>
+                  Exportando...
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                  Exportar Timeline
+                </>
+              )}
+            </button>
+            <button onClick={() => setActiveTab('editar')} className="px-5 py-2.5 text-[10px] font-black uppercase tracking-widest text-slate-500 hover:bg-slate-50 rounded-xl border border-slate-100 transition-all">Editar Carátula</button>
+            <button
+              onClick={() => {
+                if (confirm("¿Estás seguro de eliminar este expediente? Esta acción no se puede deshacer.")) {
+                  onDelete(String(caseData.id));
+                }
+              }}
+              className="px-5 py-2.5 text-[10px] font-black uppercase tracking-widest text-red-400 hover:bg-red-50 rounded-xl border border-red-100 transition-all"
+            >
+              Eliminar
+            </button>
+          </div>
         </div>
         <div className="absolute top-0 right-0 w-32 h-32 bg-orange-500/5 rounded-full -mr-16 -mt-16"></div>
-      </header>
+      </header >
 
       <nav className="flex gap-2 bg-white p-1.5 rounded-3xl border border-slate-100 shadow-sm overflow-x-auto">
         {(['actuaciones', 'alertas', 'notas'] as const).map(tab => (
-          <button 
-            key={tab} 
+          <button
+            key={tab}
             onClick={() => setActiveTab(tab)}
             className={`flex-1 py-4 px-6 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${activeTab === tab ? 'bg-black text-white shadow-xl' : 'text-slate-400 hover:bg-slate-50'}`}
           >
             {tab === 'notas' ? 'Biblioteca Estratégica' : tab === 'alertas' ? 'Tareas/Alertas' : tab}
           </button>
         ))}
+        {isAdmin && (
+          <button
+            onClick={() => setActiveTab('digital' as any)}
+            className={`flex-1 py-4 px-6 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${activeTab === ('digital' as any) ? 'bg-orange-600 text-white shadow-xl shadow-orange-200' : 'text-slate-400 hover:bg-slate-50'}`}
+          >
+            Expediente Digital
+          </button>
+        )}
       </nav>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-1 space-y-6">
-           <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm space-y-6">
-              <h3 className="text-[11px] font-black text-slate-900 uppercase tracking-widest border-b border-slate-50 pb-4">Detalles del Proceso</h3>
-              {[
-                { label: 'Responsable', value: caseData.abogado_responsable },
-                { label: 'Juzgado / Sala', value: caseData.juzgado },
-                { label: 'Cliente', value: caseData.cliente_nombre },
-                { label: 'DNI/RUC', value: caseData.cliente_dni },
-                { label: 'Contraparte', value: caseData.contraparte }
-              ].map(item => (
-                <div key={item.label}>
-                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter mb-1">{item.label}</p>
-                   <p className="text-sm font-bold text-slate-800 bg-slate-50 px-3 py-2 rounded-xl">{item.value || 'No consignado'}</p>
+          <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm space-y-6">
+            <h3 className="text-[11px] font-black text-slate-900 uppercase tracking-widest border-b border-slate-50 pb-4">Detalles del Proceso</h3>
+
+            {/* BOTON EXPEDIENTE DIGITAL PUBLICO */}
+            {caseData.folder_link && (
+              <a
+                href={caseData.folder_link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-3 w-full bg-black hover:bg-zinc-800 text-white p-4 rounded-2xl shadow-lg shadow-slate-200 transition-all group"
+              >
+                <svg className="w-5 h-5 text-orange-500 group-hover:text-orange-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+                <div className="text-left">
+                  <p className="text-[9px] font-black uppercase opacity-70 text-zinc-400">Acceso Directo</p>
+                  <p className="text-xs font-black uppercase tracking-widest text-white">Abrir Carpeta Digital</p>
                 </div>
-              ))}
-              <div className="pt-4 border-t border-slate-50 space-y-4">
-                <div>
-                  <p className="text-[9px] font-bold text-slate-400 uppercase mb-2">Estado de Tramitación</p>
-                  <select 
-                    className="w-full bg-orange-50 text-orange-600 font-black px-4 py-3 rounded-2xl outline-none text-[10px] uppercase tracking-widest border border-orange-100 shadow-sm"
-                    value={caseData.estado}
-                    onChange={(e) => handleUpdateField('estado', e.target.value)}
-                  >
-                    {Object.values(CaseStatus).map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <p className="text-[9px] font-bold text-slate-400 uppercase mb-2">Etiquetas</p>
-                  <select
-                    multiple
-                    className="w-full bg-slate-50 px-4 py-3 rounded-2xl outline-none text-[10px] font-bold border border-slate-100 min-h-[100px]"
-                    value={caseData.etiquetas?.map(t => String(t.id)) || []}
-                    onChange={(e) => {
-                      const selectedIds = Array.from(e.target.selectedOptions, option => option.value);
-                      const selectedTags = tags.filter(t => selectedIds.includes(String(t.id)));
-                      handleUpdateField('etiquetas_ids', selectedTags.map(t => t.id));
-                    }}
-                  >
-                    {tags.map(tag => (
-                      <option key={tag.id} value={String(tag.id)}>
-                        {tag.nombre}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-[8px] text-slate-400 mt-1">Mantén Ctrl/Cmd para seleccionar múltiples</p>
-                </div>
+                <svg className="w-4 h-4 ml-auto opacity-50 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+              </a>
+            )}
+
+            {[
+              { label: 'Responsable', value: caseData.abogado_responsable },
+              { label: 'Juzgado / Sala', value: caseData.juzgado },
+              { label: 'Cliente', value: caseData.cliente_nombre },
+              { label: 'DNI/RUC', value: caseData.cliente_dni },
+              { label: 'Contraparte', value: caseData.contraparte }
+            ].map(item => (
+              <div key={item.label}>
+                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter mb-1">{item.label}</p>
+                <p className="text-sm font-bold text-slate-800 bg-slate-50 px-3 py-2 rounded-xl">{item.value || 'No consignado'}</p>
               </div>
-           </div>
+            ))}
+            <div className="pt-4 border-t border-slate-50 space-y-4">
+              <div>
+                <p className="text-[9px] font-bold text-slate-400 uppercase mb-2">Estado de Tramitación</p>
+                <select
+                  className="w-full bg-orange-50 text-orange-600 font-black px-4 py-3 rounded-2xl outline-none text-[10px] uppercase tracking-widest border border-orange-100 shadow-sm"
+                  value={caseData.estado}
+                  onChange={(e) => handleUpdateField('estado', e.target.value)}
+                >
+                  {Object.values(CaseStatus).map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div>
+                <p className="text-[9px] font-bold text-slate-400 uppercase mb-2">Etiquetas</p>
+                <select
+                  multiple
+                  className="w-full bg-slate-50 px-4 py-3 rounded-2xl outline-none text-[10px] font-bold border border-slate-100 min-h-[100px]"
+                  value={caseData.etiquetas?.map(t => String(t.id)) || []}
+                  onChange={(e) => {
+                    const selectedIds = Array.from(e.target.selectedOptions, option => option.value);
+                    const selectedTags = tags.filter(t => selectedIds.includes(String(t.id)));
+                    handleUpdateField('etiquetas_ids', selectedTags.map(t => t.id));
+                  }}
+                >
+                  {tags.map(tag => (
+                    <option key={tag.id} value={String(tag.id)}>
+                      {tag.nombre}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[8px] text-slate-400 mt-1">Mantén Ctrl/Cmd para seleccionar múltiples</p>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div className="lg:col-span-2 space-y-6">
@@ -449,14 +692,14 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                 )}
                 <div className="space-y-4">
                   <div className="flex flex-col md:flex-row gap-4">
-                    <input 
-                      className="flex-1 bg-slate-50 p-4 rounded-2xl outline-none text-xs font-bold border border-slate-100 focus:border-orange-200 transition-all" 
-                      placeholder="Resumen de la actuación..." 
-                      value={newActuacion.descripcion} 
-                      onChange={(e) => setNewActuacion({...newActuacion, descripcion: e.target.value})}
+                    <input
+                      className="flex-1 bg-slate-50 p-4 rounded-2xl outline-none text-xs font-bold border border-slate-100 focus:border-orange-200 transition-all"
+                      placeholder="Resumen de la actuación..."
+                      value={newActuacion.descripcion}
+                      onChange={(e) => setNewActuacion({ ...newActuacion, descripcion: e.target.value })}
                       required
                     />
-                    <select className="bg-slate-50 p-4 rounded-2xl outline-none text-[10px] font-bold border border-slate-100" value={newActuacion.tipo} onChange={(e) => setNewActuacion({...newActuacion, tipo: e.target.value})}>
+                    <select className="bg-slate-50 p-4 rounded-2xl outline-none text-[10px] font-bold border border-slate-100" value={newActuacion.tipo} onChange={(e) => setNewActuacion({ ...newActuacion, tipo: e.target.value })}>
                       <option value="Escrito">Escrito</option>
                       <option value="Audiencia">Audiencia</option>
                       <option value="Notificación">Notificación</option>
@@ -466,26 +709,33 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                   </div>
                   <div className="flex flex-col md:flex-row gap-4 items-center">
                     {newActuacion.tipo === 'Otro' && (
-                      <input 
-                      className="flex-1 bg-slate-50 p-4 rounded-2xl outline-none text-[10px] font-bold border border-orange-200" 
-                      placeholder="Especifique tipo de actuación..." 
-                      value={newActuacion.tipoPersonalizado} 
-                      onChange={(e) => setNewActuacion({...newActuacion, tipoPersonalizado: e.target.value})}
-                      required={newActuacion.tipo === 'Otro'}
-                    />
+                      <input
+                        className="flex-1 bg-slate-50 p-4 rounded-2xl outline-none text-[10px] font-bold border border-orange-200"
+                        placeholder="Especifique tipo de actuación..."
+                        value={newActuacion.tipoPersonalizado}
+                        onChange={(e) => setNewActuacion({ ...newActuacion, tipoPersonalizado: e.target.value })}
+                        required={newActuacion.tipo === 'Otro'}
+                      />
                     )}
-                    <input type="date" className="bg-slate-50 p-4 rounded-2xl outline-none text-[10px] font-bold border border-slate-100" value={newActuacion.fecha} onChange={(e) => setNewActuacion({...newActuacion, fecha: e.target.value})} />
-                    <button 
-                      onClick={addActuacion} 
-                      disabled={!newActuacion.descripcion.trim() || (newActuacion.tipo === 'Otro' && !newActuacion.tipoPersonalizado.trim())}
-                      className="bg-orange-500 text-white p-4 px-10 rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-orange-100 hover:bg-orange-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    <input type="date" className="bg-slate-50 p-4 rounded-2xl outline-none text-[10px] font-bold border border-slate-100" value={newActuacion.fecha} onChange={(e) => setNewActuacion({ ...newActuacion, fecha: e.target.value })} />
+                    <button
+                      onClick={addActuacion}
+                      disabled={!newActuacion.descripcion.trim() || (newActuacion.tipo === 'Otro' && !newActuacion.tipoPersonalizado.trim()) || submittingActuacion}
+                      className="bg-orange-500 text-white p-4 px-10 rounded-2xl font-black text-[10px] uppercase shadow-lg shadow-orange-100 hover:bg-orange-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                     >
-                      Agregar al Timeline
+                      {submittingActuacion ? (
+                        <>
+                          <span className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent"></span>
+                          <span>Guardando...</span>
+                        </>
+                      ) : (
+                        'Agregar al Timeline'
+                      )}
                     </button>
                   </div>
                 </div>
               </div>
-              
+
               {/* Filtro, orden y paginación de actuaciones */}
               {actuacionesRaw.length > 0 && (
                 <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col sm:flex-row gap-3 flex-wrap items-center justify-between">
@@ -532,7 +782,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                 {actuacionesFiltered.length === 0 ? (
                   <div className="bg-white p-12 rounded-[2rem] border border-slate-100 text-center">
                     <svg className="w-16 h-16 text-slate-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <p className="text-slate-400 font-bold text-sm">
                       {actuacionesRaw.length === 0 ? 'No hay actuaciones registradas' : 'Ninguna actuación coincide con el filtro'}
@@ -685,73 +935,130 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
             </div>
           )}
 
+          {activeTab === ('digital' as any) && isAdmin && (
+            <div className="space-y-6 animate-fadeIn">
+              <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm text-center">
+                <div className="w-20 h-20 bg-orange-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <svg className="w-10 h-10 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" /></svg>
+                </div>
+                <h4 className="text-xl font-bold text-slate-900 mb-2">Vincular Carpeta Digital</h4>
+                <p className="text-sm text-slate-400 max-w-md mx-auto mb-8">
+                  Conecta este expediente con su carpeta en la nube (Google Drive, Dropbox, OneDrive).
+                  El botón de acceso aparecerá automáticamente para todos los usuarios.
+                </p>
+
+                <div className="max-w-xl mx-auto space-y-4">
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                      <svg className="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                      </svg>
+                    </div>
+                    <input
+                      type="url"
+                      className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-2xl outline-none focus:ring-2 focus:ring-orange-500 focus:border-orange-500 transition-all font-medium text-slate-700"
+                      placeholder="https://drive.google.com/drive/folders/..."
+                      value={digitalLinkInput}
+                      onChange={(e) => setDigitalLinkInput(e.target.value)}
+                    />
+                  </div>
+
+                  <button
+                    onClick={saveDigitalLink}
+                    disabled={isSavingLink}
+                    className="w-full bg-black hover:bg-zinc-800 text-white font-bold py-4 rounded-2xl shadow-lg shadow-slate-200 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {isSavingLink ? 'Guardando...' : 'Guardar Enlace'}
+                  </button>
+
+                  {/* Custom Notification */}
+                  {showSuccessMsg && (
+                    <div className="animate-fadeIn p-4 bg-emerald-50 text-emerald-700 rounded-xl text-xs font-bold border border-emerald-100 flex items-center justify-center gap-2">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" /></svg>
+                      Link del expediente actualizado correctamente.
+                    </div>
+                  )}
+
+                  {caseData.folder_link && (
+                    <div className="pt-4 mt-4 border-t border-slate-100">
+                      <p className="text-xs text-slate-400 mb-2 font-bold uppercase tracking-widest">Enlace actual activo</p>
+                      <a href={caseData.folder_link} target="_blank" rel="noopener noreferrer" className="text-orange-600 hover:underline text-sm break-all font-medium">
+                        {caseData.folder_link}
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {activeTab === 'alertas' && (
             <div className="space-y-6 animate-fadeIn">
               <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm">
                 <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest mb-6">Programar Vencimiento / Plazo</h4>
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <input 
-                      className="bg-slate-50 p-4 rounded-2xl outline-none text-xs font-bold border border-slate-100" 
-                      placeholder="Título (ej: Plazo Contestación)" 
-                      value={newAlerta.titulo} 
-                      onChange={(e) => setNewAlerta({...newAlerta, titulo: e.target.value})}
+                    <input
+                      className="bg-slate-50 p-4 rounded-2xl outline-none text-xs font-bold border border-slate-100"
+                      placeholder="Título (ej: Plazo Contestación)"
+                      value={newAlerta.titulo}
+                      onChange={(e) => setNewAlerta({ ...newAlerta, titulo: e.target.value })}
                       required
                     />
-                    <input 
-                      type="date" 
-                      className="bg-slate-50 p-4 rounded-2xl outline-none text-[10px] font-bold border border-slate-100" 
-                      value={newAlerta.fecha_vencimiento} 
-                      onChange={(e) => setNewAlerta({...newAlerta, fecha_vencimiento: e.target.value})}
+                    <input
+                      type="date"
+                      className="bg-slate-50 p-4 rounded-2xl outline-none text-[10px] font-bold border border-slate-100"
+                      value={newAlerta.fecha_vencimiento}
+                      onChange={(e) => setNewAlerta({ ...newAlerta, fecha_vencimiento: e.target.value })}
                       min={new Date().toISOString().split('T')[0]}
                       required
                     />
-                    <input 
-                      type="time" 
-                      className="bg-slate-50 p-4 rounded-2xl outline-none text-[10px] font-bold border border-slate-100" 
-                      value={newAlerta.hora} 
-                      onChange={(e) => setNewAlerta({...newAlerta, hora: e.target.value})}
+                    <input
+                      type="time"
+                      className="bg-slate-50 p-4 rounded-2xl outline-none text-[10px] font-bold border border-slate-100"
+                      value={newAlerta.hora}
+                      onChange={(e) => setNewAlerta({ ...newAlerta, hora: e.target.value })}
                       title="Hora opcional"
                     />
                   </div>
-                    <textarea 
-                      className="w-full bg-slate-50 p-4 rounded-2xl outline-none text-[11px] font-bold border border-slate-100 min-h-[80px]" 
-                      placeholder="Resumen detallado del vencimiento (opcional)..." 
-                      value={newAlerta.resumen} 
-                      onChange={(e) => setNewAlerta({...newAlerta, resumen: e.target.value})}
+                  <textarea
+                    className="w-full bg-slate-50 p-4 rounded-2xl outline-none text-[11px] font-bold border border-slate-100 min-h-[80px]"
+                    placeholder="Resumen detallado del vencimiento (opcional)..."
+                    value={newAlerta.resumen}
+                    onChange={(e) => setNewAlerta({ ...newAlerta, resumen: e.target.value })}
+                  />
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Tiempo estimado (horas)</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={999}
+                      className="w-24 bg-slate-50 p-3 rounded-xl outline-none text-xs font-bold border border-slate-100"
+                      placeholder="Ej: 2"
+                      value={newAlerta.tiempo_estimado_minutos === 0 ? '' : Math.floor(newAlerta.tiempo_estimado_minutos / 60)}
+                      onChange={(e) => {
+                        const h = Math.max(0, parseInt(e.target.value, 10) || 0);
+                        setNewAlerta({ ...newAlerta, tiempo_estimado_minutos: h * 60 });
+                      }}
+                      title="Horas"
                     />
-                    <div className="flex flex-wrap items-center gap-3">
-                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Tiempo estimado (horas)</span>
-                      <input 
-                        type="number" 
-                        min={0} 
-                        max={999} 
-                        className="w-24 bg-slate-50 p-3 rounded-xl outline-none text-xs font-bold border border-slate-100" 
-                        placeholder="Ej: 2" 
-                        value={newAlerta.tiempo_estimado_minutos === 0 ? '' : Math.floor(newAlerta.tiempo_estimado_minutos / 60)}
-                        onChange={(e) => {
-                          const h = Math.max(0, parseInt(e.target.value, 10) || 0);
-                          setNewAlerta({ ...newAlerta, tiempo_estimado_minutos: h * 60 });
-                        }}
-                        title="Horas"
-                      />
-                      <span className="text-slate-400 font-bold">h</span>
-                    </div>
-                    <button 
-                      type="button"
-                      onClick={addAlerta} 
-                      disabled={!newAlerta.titulo.trim() || !newAlerta.fecha_vencimiento || submittingAlerta}
-                      className="w-full bg-black text-white p-4 rounded-2xl font-black text-[10px] uppercase shadow-xl hover:bg-zinc-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 min-h-[52px]"
-                    >
-                      {submittingAlerta ? (
-                        <>
-                          <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" aria-hidden />
-                          <span>Registrando plazo…</span>
-                        </>
-                      ) : (
-                        'Registrar Plazo'
-                      )}
-                    </button>
+                    <span className="text-slate-400 font-bold">h</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addAlerta}
+                    disabled={!newAlerta.titulo.trim() || !newAlerta.fecha_vencimiento || submittingAlerta}
+                    className="w-full bg-black text-white p-4 rounded-2xl font-black text-[10px] uppercase shadow-xl hover:bg-zinc-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 min-h-[52px]"
+                  >
+                    {submittingAlerta ? (
+                      <>
+                        <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" aria-hidden />
+                        <span>Registrando plazo…</span>
+                      </>
+                    ) : (
+                      'Registrar Plazo'
+                    )}
+                  </button>
                 </div>
               </div>
 
@@ -784,47 +1091,47 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                 {(caseData.alertas || []).length === 0 ? (
                   <div className="bg-white p-12 rounded-[2rem] border border-slate-100 text-center">
                     <svg className="w-16 h-16 text-slate-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <p className="text-slate-400 font-bold text-sm">No hay tareas/alertas programadas</p>
                     <p className="text-slate-300 text-xs mt-2">Agrega la primera tarea/alerta o plazo</p>
                   </div>
                 ) : (
                   (caseData.alertas || []).map(al => (
-                  <div key={al.id} className={`p-6 rounded-[2rem] border transition-all relative group ${al.cumplida ? 'bg-slate-50 border-slate-200' : 'bg-white border-slate-100 shadow-sm'}`}>
-                    <div className="flex justify-between items-start mb-4">
-                       <span className={`text-[10px] font-black uppercase px-3 py-1 rounded-lg ${al.cumplida ? 'bg-zinc-200 text-zinc-500' : 'bg-orange-100 text-orange-600'}`}>
+                    <div key={al.id} className={`p-6 rounded-[2rem] border transition-all relative group ${al.cumplida ? 'bg-slate-50 border-slate-200' : 'bg-white border-slate-100 shadow-sm'}`}>
+                      <div className="flex justify-between items-start mb-4">
+                        <span className={`text-[10px] font-black uppercase px-3 py-1 rounded-lg ${al.cumplida ? 'bg-zinc-200 text-zinc-500' : 'bg-orange-100 text-orange-600'}`}>
                           {al.cumplida ? 'Cumplido' : 'Pendiente'}
-                       </span>
-                       <div className="flex gap-4 items-center">
+                        </span>
+                        <div className="flex gap-4 items-center">
                           <span className="text-[11px] font-bold text-slate-400 font-mono uppercase tracking-tighter">
                             {al.fecha_vencimiento} {al.hora ? `| ${al.hora}` : ''}
                           </span>
-                          <button 
+                          <button
                             onClick={(e) => {
                               e.stopPropagation();
                               deleteAlerta(String(al.id));
-                            }} 
+                            }}
                             className="text-red-300 hover:text-red-500 font-black transition-all"
                             title="Eliminar tarea/alerta"
                           >
                             ×
                           </button>
-                       </div>
+                        </div>
+                      </div>
+                      <p className={`text-base font-bold ${al.cumplida ? 'line-through text-slate-400' : 'text-slate-900 uppercase'}`}>{al.titulo}</p>
+                      {al.resumen && <p className="text-sm text-slate-500 mt-2 font-medium bg-slate-50 p-4 rounded-2xl border border-slate-50 italic whitespace-pre-wrap">{al.resumen}</p>}
+                      {al.tiempo_estimado_minutos != null && al.tiempo_estimado_minutos > 0 && (
+                        <p className="mt-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                          Tiempo est.: {formatTiempoEstimado(al.tiempo_estimado_minutos)}
+                        </p>
+                      )}
+                      <div className="mt-4 flex justify-between items-center text-[9px] font-black uppercase text-slate-300">
+                        <span>Programado por @{al.created_by_username || al.createdBy || 'sistema'}</span>
+                        {al.cumplida && <span>✓ {al.completed_by_username || al.completedBy || 'sistema'}</span>}
+                      </div>
                     </div>
-                    <p className={`text-base font-bold ${al.cumplida ? 'line-through text-slate-400' : 'text-slate-900 uppercase'}`}>{al.titulo}</p>
-                    {al.resumen && <p className="text-sm text-slate-500 mt-2 font-medium bg-slate-50 p-4 rounded-2xl border border-slate-50 italic whitespace-pre-wrap">{al.resumen}</p>}
-                    {al.tiempo_estimado_minutos != null && al.tiempo_estimado_minutos > 0 && (
-                      <p className="mt-2 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                        Tiempo est.: {formatTiempoEstimado(al.tiempo_estimado_minutos)}
-                      </p>
-                    )}
-                    <div className="mt-4 flex justify-between items-center text-[9px] font-black uppercase text-slate-300">
-                      <span>Programado por @{al.created_by_username || al.createdBy || 'sistema'}</span>
-                      {al.cumplida && <span>✓ {al.completed_by_username || al.completedBy || 'sistema'}</span>}
-                    </div>
-                  </div>
-                ))
+                  ))
                 )}
               </div>
             </div>
@@ -835,15 +1142,21 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
               <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm">
                 <h4 className="text-[11px] font-black text-orange-600 uppercase tracking-widest mb-6">Biblioteca Estratégica: Registro de Evento</h4>
                 <div className="space-y-4">
+                  {editingNoteId && (
+                    <div className="bg-orange-50 p-4 rounded-xl border border-orange-100 mb-4 flex justify-between items-center">
+                      <span className="text-xs font-bold text-orange-700">MODO EDICIÓN: Editando nota existente</span>
+                      <button onClick={cancelEditNote} className="text-xs font-black uppercase text-orange-400 hover:text-orange-600">Cancelar Edición</button>
+                    </div>
+                  )}
                   <div className="flex gap-4">
-                    <input 
-                      className="flex-1 bg-slate-50 p-4 rounded-2xl outline-none text-sm font-bold border border-slate-100" 
-                      placeholder="Título del Evento (ej: Resultado Entrevista)" 
-                      value={newNote.titulo} 
-                      onChange={(e) => setNewNote({...newNote, titulo: e.target.value})}
+                    <input
+                      className="flex-1 bg-slate-50 p-4 rounded-2xl outline-none text-sm font-bold border border-slate-100 focus:ring-2 focus:ring-orange-500 transition-all"
+                      placeholder="Título del Evento (ej: Resultado Entrevista)"
+                      value={newNote.titulo}
+                      onChange={(e) => setNewNote({ ...newNote, titulo: e.target.value })}
                       required
                     />
-                    <select className="bg-slate-50 p-4 rounded-2xl outline-none text-[10px] font-black border border-slate-100 uppercase" value={newNote.etiqueta} onChange={(e) => setNewNote({...newNote, etiqueta: e.target.value})}>
+                    <select className="bg-slate-50 p-4 rounded-2xl outline-none text-[10px] font-black border border-slate-100 uppercase focus:ring-2 focus:ring-orange-500" value={newNote.etiqueta} onChange={(e) => setNewNote({ ...newNote, etiqueta: e.target.value })}>
                       <option value="Estrategia">Estrategia</option>
                       <option value="Documentación">Documentación</option>
                       <option value="Investigación">Investigación</option>
@@ -854,7 +1167,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                     <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Resumen / Descripción breve</label>
                     <input
                       type="text"
-                      className="w-full bg-slate-50 p-4 rounded-2xl outline-none text-sm font-medium border border-slate-100"
+                      className="w-full bg-slate-50 p-4 rounded-2xl outline-none text-sm font-medium border border-slate-100 focus:ring-2 focus:ring-orange-500 transition-all"
                       placeholder="Resumen opcional en una línea..."
                       value={newNote.resumen || ''}
                       onChange={(e) => setNewNote({ ...newNote, resumen: e.target.value })}
@@ -869,28 +1182,35 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                       minHeight="180px"
                     />
                   </div>
-                  <button 
-                    onClick={addNote} 
-                    disabled={!newNote.titulo.trim() || !(newNote.contenido || '').replace(/<[^>]*>/g, '').trim()}
-                    className="w-full bg-black text-white p-4 rounded-2xl font-black text-[10px] uppercase shadow-xl hover:bg-zinc-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  <button
+                    onClick={addNote}
+                    disabled={!newNote.titulo.trim() || !(newNote.contenido || '').replace(/<[^>]*>/g, '').trim() || submittingNote}
+                    className="w-full bg-black text-white p-4 rounded-2xl font-black text-[10px] uppercase shadow-xl hover:bg-zinc-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                   >
-                    Guardar en Biblioteca
+                    {submittingNote ? (
+                      <>
+                        <span className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent"></span>
+                        <span>{editingNoteId ? 'Guardando...' : 'Guardando en Biblioteca...'}</span>
+                      </>
+                    ) : (
+                      editingNoteId ? 'Guardar Cambios' : 'Guardar en Biblioteca'
+                    )}
                   </button>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 gap-6">
-                {(caseData.notas || []).length === 0 ? (
+                {(notesRaw || []).length === 0 ? (
                   <div className="bg-white p-12 rounded-[2rem] border border-slate-100 text-center">
                     <svg className="w-16 h-16 text-slate-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                     </svg>
                     <p className="text-slate-400 font-bold text-sm">No hay notas registradas</p>
                     <p className="text-slate-300 text-xs mt-2">Agrega la primera nota estratégica</p>
                   </div>
                 ) : (
-                  (caseData.notas || []).map(note => (
-                    <div key={note.id} className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm hover:border-orange-200 transition-all group relative">
+                  notesPaginated.map(note => (
+                    <div key={note.id} className={`bg-white p-8 rounded-[2rem] border shadow-sm transition-all group relative ${editingNoteId === String(note.id) ? 'border-orange-400 ring-2 ring-orange-100' : 'border-slate-100 hover:border-orange-200'}`}>
                       <div className="flex justify-between items-start mb-4">
                         <div className="flex flex-col">
                           <span className="text-[10px] font-black text-orange-600 bg-orange-50 px-3 py-1 rounded-lg uppercase w-fit mb-2 tracking-widest">{note.etiqueta}</span>
@@ -900,25 +1220,33 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                           <span className="text-[10px] font-bold text-slate-400 bg-slate-50 px-3 py-1 rounded-lg uppercase tracking-widest">
                             {new Date(note.fecha_creacion || note.created_at || Date.now()).toLocaleDateString()}
                           </span>
-                          <button
-                            onClick={() => {
-                              if (confirm('¿Eliminar esta nota?')) {
-                                api.apiDeleteNote(String(note.id)).then(() => {
-                                  const updatedNotas = (caseData.notas || []).filter(n => String(n.id) !== String(note.id));
-                                  const updatedCase = { ...caseData, notas: updatedNotas };
-                                  setCaseData(updatedCase);
-                                  onUpdate(updatedCase);
-                                }).catch(error => {
-                                  console.error('Error al eliminar nota:', error);
-                                  alert('Error al eliminar la nota');
-                                });
-                              }
-                            }}
-                            className="text-red-300 hover:text-red-500 font-black text-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                            title="Eliminar nota"
-                          >
-                            ×
-                          </button>
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => startEditNote(note)}
+                              className="text-slate-400 hover:text-orange-500 font-bold text-xs uppercase tracking-widest px-2 py-1.5 rounded-lg hover:bg-orange-50 transition-all"
+                            >
+                              EDITAR
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (confirm('¿Eliminar esta nota?')) {
+                                  api.apiDeleteNote(String(note.id)).then(() => {
+                                    const updatedNotas = (caseData.notas || []).filter(n => String(n.id) !== String(note.id));
+                                    const updatedCase = { ...caseData, notas: updatedNotas };
+                                    setCaseData(updatedCase);
+                                    onUpdate(updatedCase);
+                                  }).catch(error => {
+                                    console.error('Error al eliminar nota:', error);
+                                    alert('Error al eliminar la nota');
+                                  });
+                                }
+                              }}
+                              className="text-red-300 hover:text-red-500 font-secondary text-2xl leading-none px-2"
+                              title="Eliminar nota"
+                            >
+                              ×
+                            </button>
+                          </div>
                         </div>
                       </div>
                       {note.resumen && (
@@ -935,77 +1263,101 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, onUpdate, onBack, onDe
                     </div>
                   ))
                 )}
+                {/* Pagination Controls for Notes */}
+                {notesTotalPages > 1 && (
+                  <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setNotePage((p) => Math.max(1, p - 1))}
+                      disabled={notePage <= 1}
+                      className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Anterior
+                    </button>
+                    <span className="text-xs font-bold text-slate-500">
+                      Página {notePage} de {notesTotalPages}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setNotePage((p) => Math.min(notesTotalPages, p + 1))}
+                      disabled={notePage >= notesTotalPages}
+                      className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Siguiente
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           )}
 
           {activeTab === 'editar' && (
             <div className="bg-white p-10 rounded-[2rem] border border-slate-100 shadow-2xl">
-               <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest mb-8 border-b pb-4">Detalles del Proceso — Editar y guardar</h4>
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                 <div className="md:col-span-2 space-y-1">
-                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Carátula</label>
-                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-bold border border-slate-100" value={caseData.caratula || ''} onChange={(e) => handleUpdateField('caratula', e.target.value)} />
-                 </div>
-                 <div className="space-y-1">
-                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nro. Expediente</label>
-                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-mono border border-slate-100" value={caseData.nro_expediente || ''} onChange={(e) => handleUpdateField('nro_expediente', e.target.value)} />
-                 </div>
-                 <div className="space-y-1">
-                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Juzgado / Sala</label>
-                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.juzgado || ''} onChange={(e) => handleUpdateField('juzgado', e.target.value)} />
-                 </div>
-                 <div className="space-y-1">
-                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Contraparte</label>
-                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.contraparte || ''} onChange={(e) => handleUpdateField('contraparte', e.target.value)} />
-                 </div>
-                 <div className="space-y-1">
-                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                     Abogado responsable
-                     {!isAdmin && <span className="text-[8px] text-slate-300 ml-2">(Solo Admin)</span>}
-                   </label>
-                   <select
-                     className={`w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 font-bold ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
-                     value={caseData.abogado_responsable || ''}
-                     onChange={(e) => {
-                       if (isAdmin) handleUpdateField('abogado_responsable', e.target.value);
-                     }}
-                     disabled={!isAdmin}
-                   >
-                     <option value="">Sin asignar</option>
-                     {abogados.map((u) => (
-                       <option key={String(u.id)} value={u.username}>{u.username}</option>
-                     ))}
-                   </select>
-                 </div>
-                 <div className="space-y-1">
-                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Cliente (nombre completo)</label>
-                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.cliente_nombre || ''} onChange={(e) => handleUpdateField('cliente_nombre', e.target.value)} placeholder="Nombre del cliente" />
-                 </div>
-                 <div className="space-y-1">
-                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">DNI / RUC Cliente</label>
-                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-mono border border-slate-100" value={caseData.cliente_dni || ''} onChange={(e) => handleUpdateField('cliente_dni', e.target.value)} placeholder="DNI o RUC" />
-                 </div>
-                 <div className="space-y-1">
-                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fuero / Jurisdicción</label>
-                   <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.fuero || ''} onChange={(e) => handleUpdateField('fuero', e.target.value)} placeholder="Ej: Civil, Comercial..." />
-                 </div>
-                 <div className="space-y-1">
-                   <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Estado de tramitación</label>
-                   <select className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 font-bold" value={caseData.estado || ''} onChange={(e) => handleUpdateField('estado', e.target.value)}>
-                     {Object.values(CaseStatus).map(s => (
-                       <option key={s} value={s}>{s}</option>
-                     ))}
-                   </select>
-                 </div>
-               </div>
-               <p className="mt-6 text-[10px] text-slate-400 font-bold">Los cambios se guardan al editar cada campo. El panel izquierdo refleja los datos actualizados.</p>
-               <button type="button" onClick={() => setActiveTab('actuaciones')} className="mt-6 bg-black text-white px-12 py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-2xl hover:bg-zinc-800 transition-all">Volver a Actuaciones</button>
+              <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest mb-8 border-b pb-4">Detalles del Proceso — Editar y guardar</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="md:col-span-2 space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Carátula</label>
+                  <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-bold border border-slate-100" value={caseData.caratula || ''} onChange={(e) => handleUpdateField('caratula', e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nro. Expediente</label>
+                  <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-mono border border-slate-100" value={caseData.nro_expediente || ''} onChange={(e) => handleUpdateField('nro_expediente', e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Juzgado / Sala</label>
+                  <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.juzgado || ''} onChange={(e) => handleUpdateField('juzgado', e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Contraparte</label>
+                  <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.contraparte || ''} onChange={(e) => handleUpdateField('contraparte', e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                    Abogado responsable
+                    {!isAdmin && <span className="text-[8px] text-slate-300 ml-2">(Solo Admin)</span>}
+                  </label>
+                  <select
+                    className={`w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 font-bold ${!isAdmin ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    value={caseData.abogado_responsable || ''}
+                    onChange={(e) => {
+                      if (isAdmin) handleUpdateField('abogado_responsable', e.target.value);
+                    }}
+                    disabled={!isAdmin}
+                  >
+                    <option value="">Sin asignar</option>
+                    {abogados.map((u) => (
+                      <option key={String(u.id)} value={u.username}>{u.username}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Cliente (nombre completo)</label>
+                  <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.cliente_nombre || ''} onChange={(e) => handleUpdateField('cliente_nombre', e.target.value)} placeholder="Nombre del cliente" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">DNI / RUC Cliente</label>
+                  <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none font-mono border border-slate-100" value={caseData.cliente_dni || ''} onChange={(e) => handleUpdateField('cliente_dni', e.target.value)} placeholder="DNI o RUC" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fuero / Jurisdicción</label>
+                  <input className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100" value={caseData.fuero || ''} onChange={(e) => handleUpdateField('fuero', e.target.value)} placeholder="Ej: Civil, Comercial..." />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Estado de tramitación</label>
+                  <select className="w-full bg-slate-50 p-4 rounded-2xl outline-none border border-slate-100 font-bold" value={caseData.estado || ''} onChange={(e) => handleUpdateField('estado', e.target.value)}>
+                    {Object.values(CaseStatus).map(s => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <p className="mt-6 text-[10px] text-slate-400 font-bold">Los cambios se guardan al editar cada campo. El panel izquierdo refleja los datos actualizados.</p>
+              <button type="button" onClick={() => setActiveTab('actuaciones')} className="mt-6 bg-black text-white px-12 py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-2xl hover:bg-zinc-800 transition-all">Volver a Actuaciones</button>
             </div>
           )}
         </div>
       </div>
-    </div>
+    </div >
   );
 };
 
