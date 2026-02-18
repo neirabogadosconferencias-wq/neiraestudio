@@ -11,8 +11,11 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUser }) => {
   const isAdmin = currentUser?.isAdmin || currentUser?.is_admin || false;
   const [users, setUsers] = useState<User[]>([]);
   const [newUser, setNewUser] = useState({ username: '', password: '', rol: 'usuario' as UserRole });
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [editForm, setEditForm] = useState({ password: '', rol: 'usuario' as UserRole });
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [updatingId, setUpdatingId] = useState<string | number | null>(null);
   const [deletingId, setDeletingId] = useState<string | number | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
@@ -69,13 +72,33 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUser }) => {
         password: newUser.password,
         rol: newUser.rol,
       });
-      setUsers([...users, created]);
+      // Recargar usuarios para asegurar que se muestre el nuevo usuario con todos sus datos
+      await loadUsers();
       setNewUser({ username: '', password: '', rol: 'usuario' });
       setSuccessMessage(`Usuario "${created.username}" creado exitosamente como ${getRoleLabel(created.rol || 'usuario')}`);
       setTimeout(() => setSuccessMessage(null), 5000);
     } catch (error: any) {
       console.error('Error al crear usuario:', error);
-      const errorMessage = error?.message || 'Error al crear el usuario. Por favor, intenta nuevamente.';
+      let errorMessage = 'Error al crear el usuario. Por favor, intenta nuevamente.';
+      
+      // Intentar extraer mensaje de error más específico
+      if (error?.response?.data) {
+        const errorData = error.response.data;
+        if (typeof errorData === 'string') {
+          errorMessage = errorData;
+        } else if (errorData.username) {
+          errorMessage = Array.isArray(errorData.username) ? errorData.username[0] : errorData.username;
+        } else if (errorData.password) {
+          errorMessage = Array.isArray(errorData.password) ? errorData.password[0] : errorData.password;
+        } else if (errorData.non_field_errors) {
+          errorMessage = Array.isArray(errorData.non_field_errors) ? errorData.non_field_errors[0] : errorData.non_field_errors;
+        } else if (errorData.detail) {
+          errorMessage = errorData.detail;
+        }
+      } else if (error?.message) {
+        errorMessage = error.message;
+      }
+      
       setSuccessMessage(null);
       alert(errorMessage);
     } finally {
@@ -112,6 +135,75 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUser }) => {
       case 'abogado': return 'bg-blue-500';
       case 'usuario': return 'bg-slate-400';
       default: return 'bg-slate-400';
+    }
+  };
+
+  const startEditUser = (user: User) => {
+    setEditingUser(user);
+    const currentRol = user.rol || (user.isAdmin || user.is_admin ? 'admin' : 'usuario');
+    setEditForm({
+      password: '',
+      rol: currentRol as UserRole,
+    });
+  };
+
+  const cancelEdit = () => {
+    setEditingUser(null);
+    setEditForm({ password: '', rol: 'usuario' });
+  };
+
+  const handleUpdateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingUser) return;
+
+    if (editForm.password && editForm.password.length < 4) {
+      setSuccessMessage(null);
+      alert('La contraseña debe tener al menos 4 caracteres');
+      return;
+    }
+
+    try {
+      setUpdatingId(editingUser.id);
+      setSuccessMessage(null);
+      
+      const updateData: any = { rol: editForm.rol };
+      if (editForm.password.trim()) {
+        updateData.password = editForm.password;
+      }
+
+      const updated = await api.apiUpdateUser(String(editingUser.id), updateData);
+      
+      // Actualizar la lista de usuarios
+      setUsers(users.map(u => String(u.id) === String(editingUser.id) ? updated : u));
+      setEditingUser(null);
+      setEditForm({ password: '', rol: 'usuario' });
+      setSuccessMessage(`Usuario "${updated.username}" actualizado exitosamente`);
+      setTimeout(() => setSuccessMessage(null), 5000);
+    } catch (error: any) {
+      console.error('Error al actualizar usuario:', error);
+      let errorMessage = 'Error al actualizar el usuario. Por favor, intenta nuevamente.';
+      
+      if (error?.response?.data) {
+        const errorData = error.response.data;
+        if (typeof errorData === 'string') {
+          errorMessage = errorData;
+        } else if (errorData.rol) {
+          errorMessage = Array.isArray(errorData.rol) ? errorData.rol[0] : errorData.rol;
+        } else if (errorData.password) {
+          errorMessage = Array.isArray(errorData.password) ? errorData.password[0] : errorData.password;
+        } else if (errorData.non_field_errors) {
+          errorMessage = Array.isArray(errorData.non_field_errors) ? errorData.non_field_errors[0] : errorData.non_field_errors;
+        } else if (errorData.detail) {
+          errorMessage = errorData.detail;
+        }
+      } else if (error?.message) {
+        errorMessage = error.message;
+      }
+      
+      setSuccessMessage(null);
+      alert(errorMessage);
+    } finally {
+      setUpdatingId(null);
     }
   };
 
@@ -288,7 +380,7 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUser }) => {
                 <tr className="text-[10px] font-black uppercase tracking-widest">
                   <th className="px-6 py-4">Usuario</th>
                   <th className="px-6 py-4">Rol</th>
-                  <th className="px-6 py-4 text-right">Acción</th>
+                  <th className="px-6 py-4 text-right w-48">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
@@ -310,50 +402,145 @@ const UserManagement: React.FC<UserManagementProps> = ({ currentUser }) => {
                   const userIsAdmin = u.isAdmin || u.is_admin;
                   const userRol = u.rol || (userIsAdmin ? 'admin' : 'usuario');
                   const isDeleting = deletingId === u.id;
+                  const isEditing = editingUser && String(editingUser.id) === String(u.id);
+                  const isUpdating = updatingId === u.id;
                   
                   return (
-                    <tr key={u.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-xs uppercase ${getRoleBadgeColor(userRol, userIsAdmin)}`}>
-                            {u.username?.substring(0, 2).toUpperCase()}
+                    <React.Fragment key={u.id}>
+                      <tr className="hover:bg-slate-50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white font-black text-xs uppercase ${getRoleBadgeColor(userRol, userIsAdmin)}`}>
+                              {u.username?.substring(0, 2).toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="font-bold text-sm text-slate-900">{u.username}</p>
+                              {isMainAdmin && (
+                                <p className="text-[9px] text-slate-400 font-bold uppercase">Administrador Principal</p>
+                              )}
+                            </div>
                           </div>
-                          <div>
-                            <p className="font-bold text-sm text-slate-900">{u.username}</p>
-                            {isMainAdmin && (
-                              <p className="text-[9px] text-slate-400 font-bold uppercase">Administrador Principal</p>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${getRoleColor(userRol, userIsAdmin)}`}>
+                            {getRoleLabel(userRol)}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center justify-end gap-2 flex-wrap">
+                            {!isEditing ? (
+                              <>
+                                <button 
+                                  onClick={() => startEditUser(u)}
+                                  disabled={isDeleting || isUpdating}
+                                  className="px-3 py-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-xl font-black text-[10px] uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 whitespace-nowrap"
+                                  title="Editar usuario"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                  </svg>
+                                  <span>Editar</span>
+                                </button>
+                                <button 
+                                  onClick={() => deleteUser(u.id)} 
+                                  disabled={isDeleting || isUpdating || isMainAdmin}
+                                  className="px-3 py-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-xl font-black text-[10px] uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 whitespace-nowrap"
+                                  title={isMainAdmin ? 'No se puede eliminar el administrador principal' : 'Eliminar usuario'}
+                                >
+                                  {isDeleting ? (
+                                    <>
+                                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-red-500"></div>
+                                      <span>Eliminando...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                      </svg>
+                                      <span>Eliminar</span>
+                                    </>
+                                  )}
+                                </button>
+                              </>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={cancelEdit}
+                                  disabled={isUpdating}
+                                  className="px-3 py-1.5 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg font-bold text-[10px] uppercase tracking-widest disabled:opacity-50 transition-all"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
                             )}
                           </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${getRoleColor(userRol, userIsAdmin)}`}>
-                          {getRoleLabel(userRol)}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <button 
-                          onClick={() => deleteUser(u.id)} 
-                          disabled={isDeleting || isMainAdmin}
-                          className="px-4 py-2 bg-red-50 text-red-500 hover:bg-red-100 rounded-xl font-black text-[10px] uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed transition-all flex items-center gap-2 mx-auto"
-                          title={isMainAdmin ? 'No se puede eliminar el administrador principal' : 'Eliminar usuario'}
-                        >
-                          {isDeleting ? (
-                            <>
-                              <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-red-500"></div>
-                              Eliminando...
-                            </>
-                          ) : (
-                            <>
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
-                              </svg>
-                              Eliminar
-                            </>
-                          )}
-                        </button>
-                      </td>
-                    </tr>
+                        </td>
+                      </tr>
+                      {isEditing && (
+                        <tr>
+                          <td colSpan={3} className="px-6 py-4 bg-blue-50">
+                            <form onSubmit={handleUpdateUser} className="space-y-4">
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Nueva Contraseña (opcional)</label>
+                                  <input 
+                                    type="password"
+                                    className="w-full bg-white p-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-bold text-sm transition-all" 
+                                    placeholder="Dejar vacío para mantener la actual"
+                                    value={editForm.password} 
+                                    onChange={e => setEditForm({...editForm, password: e.target.value})}
+                                    disabled={isUpdating}
+                                    minLength={4}
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">Rol</label>
+                                  <select
+                                    className="w-full bg-white p-3 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-bold text-sm transition-all"
+                                    value={editForm.rol}
+                                    onChange={e => setEditForm({...editForm, rol: e.target.value as UserRole})}
+                                    disabled={isUpdating || isMainAdmin}
+                                  >
+                                    <option value="usuario">Usuario - Acceso básico al sistema</option>
+                                    <option value="abogado">Abogado - Acceso completo a expedientes</option>
+                                    <option value="admin">Administrador - Control total del sistema</option>
+                                  </select>
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={cancelEdit}
+                                  disabled={isUpdating}
+                                  className="px-4 py-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-xl font-bold text-[10px] uppercase tracking-widest disabled:opacity-50 transition-all"
+                                >
+                                  Cancelar
+                                </button>
+                                <button 
+                                  type="submit"
+                                  disabled={isUpdating || (editForm.password && editForm.password.length < 4)}
+                                  className="px-4 py-2 bg-blue-500 text-white hover:bg-blue-600 rounded-xl font-bold text-[10px] uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
+                                >
+                                  {isUpdating ? (
+                                    <>
+                                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                                      Actualizando...
+                                    </>
+                                  ) : (
+                                    <>
+                                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"/>
+                                      </svg>
+                                      Guardar Cambios
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </form>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   );
                 })
               )}

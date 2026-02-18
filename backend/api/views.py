@@ -1,4 +1,4 @@
-from rest_framework import viewsets, status, permissions
+from rest_framework import viewsets, status, permissions, serializers
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
@@ -11,7 +11,8 @@ from datetime import datetime, timedelta
 
 from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, Aviso
 from .serializers import (
-    UserSerializer, LawCaseSerializer, CaseActuacionSerializer,
+    UserSerializer, UserCreateSerializer, UserUpdateSerializer,
+    LawCaseSerializer, CaseActuacionSerializer,
     CaseAlertaSerializer, CaseNoteSerializer, ClienteSerializer,
     CaseTagSerializer, ActuacionTemplateSerializer,
     AvisoSerializer, LawCaseListSerializer, LoginSerializer
@@ -90,6 +91,8 @@ class UserViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'create':
             return UserCreateSerializer
+        elif self.action in ['update', 'partial_update']:
+            return UserUpdateSerializer
         return UserSerializer
     
     def get_queryset(self):
@@ -113,8 +116,32 @@ class UserViewSet(viewsets.ModelViewSet):
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)
-            logger.error(f"Error al crear usuario: {str(e)}, datos: {self.request.data}")
-            raise
+            logger.error(f"Error al crear usuario: {str(e)}, datos: {self.request.data}, usuario actual: {self.request.user.username}")
+            # Si es un ValidationError del serializer, re-lanzarlo para que el frontend vea el mensaje
+            if hasattr(e, 'detail'):
+                raise
+            raise serializers.ValidationError({'non_field_errors': [f'Error al crear usuario: {str(e)}']})
+    
+    def perform_update(self, serializer):
+        """Actualizar usuario - solo admins pueden hacerlo"""
+        if not self.request.user.is_admin:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Solo los administradores pueden actualizar usuarios')
+        
+        # No permitir modificar el usuario admin principal (id=1)
+        if serializer.instance and serializer.instance.id == 1:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('No se puede modificar el administrador principal')
+        
+        try:
+            serializer.save()
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error al actualizar usuario: {str(e)}, datos: {self.request.data}, usuario actual: {self.request.user.username}")
+            if hasattr(e, 'detail'):
+                raise
+            raise serializers.ValidationError({'non_field_errors': [f'Error al actualizar usuario: {str(e)}']})
 
 
 class CaseListPagination(PageNumberPagination):

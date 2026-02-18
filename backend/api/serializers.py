@@ -278,32 +278,124 @@ class UserCreateSerializer(serializers.ModelSerializer):
     
     def validate(self, attrs):
         """Validar que si se envía is_admin, se sincronice con rol"""
+        # Asegurar que rol tenga un valor por defecto si no se envía
+        if 'rol' not in attrs or not attrs.get('rol'):
+            attrs['rol'] = 'usuario'
+        
         # Si se envía is_admin pero no rol, actualizar rol
-        if attrs.get('is_admin') and not attrs.get('rol'):
+        if attrs.get('is_admin') and attrs.get('rol') == 'usuario':
             attrs['rol'] = 'admin'
+        
         # Si se envía rol, actualizar is_admin
         if attrs.get('rol') == 'admin':
             attrs['is_admin'] = True
         elif attrs.get('rol') in ['abogado', 'usuario']:
             attrs['is_admin'] = False
+        
         return attrs
     
     def create(self, validated_data):
-        password = validated_data.pop('password')
+        password = validated_data.pop('password', None)
+        if not password:
+            raise serializers.ValidationError({'password': 'La contraseña es requerida'})
+        
         rol = validated_data.pop('rol', 'usuario')
         is_admin = validated_data.pop('is_admin', False)
         
-        # Sincronizar rol con is_admin
+        # Asegurar sincronización rol/is_admin (por si no pasó por validate)
         if rol == 'admin':
             is_admin = True
-        else:
+        elif rol in ('abogado', 'usuario'):
             is_admin = False
         
-        user = User.objects.create_user(
-            username=validated_data['username'],
-            password=password,
-            rol=rol,
-            is_admin=is_admin,
-            is_staff=is_admin,  # Si es admin, también es staff
-        )
-        return user
+        try:
+            user = User.objects.create_user(
+                username=validated_data['username'],
+                password=password,
+                rol=rol,
+                is_admin=is_admin,
+                is_staff=is_admin,  # Si es admin, también es staff
+            )
+            return user
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error en create_user: {str(e)}, rol={rol}, is_admin={is_admin}")
+            raise serializers.ValidationError({'username': f'Error al crear el usuario: {str(e)}'})
+
+
+class UserUpdateSerializer(serializers.ModelSerializer):
+    """Serializer para actualizar usuarios"""
+    password = serializers.CharField(write_only=True, min_length=4, required=False, allow_blank=True)
+    rol = serializers.ChoiceField(choices=User.ROL_CHOICES, required=False)
+    is_admin = serializers.BooleanField(required=False, write_only=True)
+    
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'password', 'rol', 'is_admin']
+        extra_kwargs = {
+            'username': {'required': False},
+        }
+    
+    def validate_username(self, value):
+        """Validar que el username no exista (excepto para el usuario actual)"""
+        if self.instance and User.objects.filter(username=value).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError('Este nombre de usuario ya existe')
+        elif not self.instance and User.objects.filter(username=value).exists():
+            raise serializers.ValidationError('Este nombre de usuario ya existe')
+        return value
+    
+    def validate(self, attrs):
+        """Validar que si se envía is_admin, se sincronice con rol"""
+        # Si se envía rol, actualizar is_admin
+        if 'rol' in attrs:
+            if attrs['rol'] == 'admin':
+                attrs['is_admin'] = True
+            elif attrs['rol'] in ['abogado', 'usuario']:
+                attrs['is_admin'] = False
+        
+        # Si se envía is_admin pero no rol, actualizar rol
+        if attrs.get('is_admin') and 'rol' not in attrs:
+            attrs['rol'] = 'admin'
+        elif not attrs.get('is_admin') and 'rol' not in attrs and 'is_admin' in attrs:
+            # Si se establece is_admin=False pero no se especifica rol, mantener el rol actual
+            pass
+        
+        return attrs
+    
+    def update(self, instance, validated_data):
+        """Actualizar usuario"""
+        password = validated_data.pop('password', None)
+        rol = validated_data.pop('rol', None)
+        is_admin = validated_data.pop('is_admin', None)
+        
+        # Actualizar contraseña si se proporciona
+        if password:
+            instance.set_password(password)
+        
+        # Actualizar rol si se proporciona
+        if rol is not None:
+            instance.rol = rol
+            # Sincronizar is_admin con rol
+            if rol == 'admin':
+                instance.is_admin = True
+                instance.is_staff = True
+            else:
+                instance.is_admin = False
+        
+        # Actualizar is_admin si se proporciona directamente
+        if is_admin is not None:
+            instance.is_admin = is_admin
+            if is_admin:
+                instance.rol = 'admin'
+                instance.is_staff = True
+            elif rol is None:  # Solo cambiar rol si no se especificó uno
+                # Mantener el rol actual si no se especifica uno nuevo
+                pass
+        
+        # Actualizar username si se proporciona
+        if 'username' in validated_data:
+            instance.username = validated_data['username']
+        
+        instance.save()
+        return instance

@@ -69,8 +69,9 @@ const apiRequest = async <T>(
   if (!response.ok) {
     // Intentar obtener el mensaje de error del JSON
     let errorMessage = response.statusText;
+    let errorData: any = null;
     try {
-      const errorData = await response.json();
+      errorData = await response.json();
       errorMessage = errorData.detail || errorData.message || errorData.error || response.statusText;
     } catch {
       // Si no se puede parsear JSON, usar el statusText
@@ -78,10 +79,15 @@ const apiRequest = async <T>(
 
     // Para errores 403, mensaje más específico
     if (response.status === 403) {
-      throw new Error('No tienes permisos de administrador para acceder a esta sección');
+      const err: any = new Error('No tienes permisos de administrador para acceder a esta sección');
+      err.response = { status: 403, data: errorData };
+      throw err;
     }
 
-    throw new Error(errorMessage || `Error ${response.status}: ${response.statusText}`);
+    // Crear error con datos de respuesta para mejor manejo en el frontend
+    const err: any = new Error(errorMessage || `Error ${response.status}: ${response.statusText}`);
+    err.response = { status: response.status, data: errorData };
+    throw err;
   }
 
   // Si la respuesta está vacía (204 No Content), retornar null
@@ -385,6 +391,32 @@ export const apiCreateUser = async (user: Omit<User, 'id'> & { password: string;
   };
 };
 
+export const apiUpdateUser = async (id: string, user: Partial<User> & { password?: string; rol?: string }): Promise<User> => {
+  const payload: any = {};
+  
+  if (user.rol !== undefined) {
+    payload.rol = user.rol;
+  }
+  if (user.password !== undefined && user.password.trim() !== '') {
+    payload.password = user.password;
+  }
+  if (user.username !== undefined) {
+    payload.username = user.username;
+  }
+
+  const updated = await apiRequest<any>(`/users/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+  
+  return {
+    ...updated,
+    id: String(updated.id),
+    isAdmin: updated.is_admin ?? updated.isAdmin ?? false,
+    rol: updated.rol || (updated.is_admin ? 'admin' : 'usuario'),
+  };
+};
+
 export const apiDeleteUser = async (id: string): Promise<void> => {
   await apiRequest(`/users/${id}/`, {
     method: 'DELETE',
@@ -547,9 +579,7 @@ export const apiCreateAviso = async (contenido: string): Promise<any> => {
     method: 'POST',
     body: JSON.stringify({ contenido, active: true }),
   });
-};
-
-// ============ ALERTAS ============
+};// ============ ALERTAS ============
 export const apiGetAlertasPaginated = async (page: number): Promise<{ results: CaseAlerta[]; next: string | null }> => {
   const result = await apiRequest<any>(`/alertas/?page_size=5&page=${page}`);
   return {
