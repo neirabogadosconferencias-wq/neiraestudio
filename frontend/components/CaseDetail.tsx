@@ -15,6 +15,9 @@ interface CaseDetailProps {
   onEditSaved?: () => void;
 }
 
+/** Indica si el caso trae datos completos (actuaciones/alertas/notas) ya cargados (p. ej. desde cache de preload). */
+const hasPreloadedDetail = (c: LawCase) => Array.isArray(c.actuaciones);
+
 const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, currentUser: currentUserProp, templates: templatesProp, tags: tagsProp, onUpdate, onBack, onDelete, onEditSaved }) => {
   const [activeTab, setActiveTab] = useState<'actuaciones' | 'alertas' | 'notas' | 'editar'>('actuaciones');
   const [currentUser, setCurrentUser] = useState<User | null>(currentUserProp ?? null);
@@ -24,7 +27,7 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, currentUser: currentUs
     alertas: lawCase.alertas || [],
     notas: lawCase.notas || [],
   });
-  const [isLoadingFullCase, setIsLoadingFullCase] = useState(true);
+  const [isLoadingFullCase, setIsLoadingFullCase] = useState(!hasPreloadedDetail(lawCase));
 
   useEffect(() => {
     const initialUser = currentUserProp ?? api.apiGetStoredUser();
@@ -33,7 +36,8 @@ const CaseDetail: React.FC<CaseDetailProps> = ({ lawCase, currentUser: currentUs
     }
 
     const loadData = async () => {
-      setIsLoadingFullCase(true);
+      const hadPreload = hasPreloadedDetail(lawCase);
+      if (!hadPreload) setIsLoadingFullCase(true);
       try {
         const fullCase = await api.apiGetCase(String(lawCase.id)).catch(() => lawCase);
         setCaseData({

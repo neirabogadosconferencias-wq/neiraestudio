@@ -8,6 +8,8 @@ interface CalendarProps {
   cases?: LawCase[];
   onSelectCase: (lawCase: LawCase) => void;
   onViewChange: (view: ViewState) => void;
+  /** Cache de eventos por mes (YYYY-MM) desde App; evita loading si ya se precargó al hacer hover. */
+  initialEventsByMonth?: Record<string, CalendarEvent[]>;
 }
 
 const normalizeDate = (dateInput: string | Date): string => {
@@ -27,7 +29,7 @@ const getEventFecha = (e: CalendarEvent): string =>
 
 const CACHE_KEY = (desde: string, hasta: string) => `${desde}_${hasta}`;
 
-const Calendar: React.FC<CalendarProps> = ({ cases: casesProp = [], onSelectCase, onViewChange }) => {
+const Calendar: React.FC<CalendarProps> = ({ cases: casesProp = [], onSelectCase, onViewChange, initialEventsByMonth }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -53,6 +55,14 @@ const Calendar: React.FC<CalendarProps> = ({ cases: casesProp = [], onSelectCase
   const cacheKey = CACHE_KEY(desde, hasta);
 
   useEffect(() => {
+    const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`;
+    const fromParent = initialEventsByMonth?.[monthKey];
+    if (fromParent !== undefined) {
+      setEvents(fromParent);
+      setEventsCache((prev) => ({ ...prev, [cacheKey]: fromParent }));
+      setLoading(false);
+      return;
+    }
     const cached = eventsCache[cacheKey];
     if (cached !== undefined) {
       setEvents(cached);
@@ -68,7 +78,7 @@ const Calendar: React.FC<CalendarProps> = ({ cases: casesProp = [], onSelectCase
       })
       .catch(() => setEvents([]))
       .finally(() => setLoading(false));
-  }, [desde, hasta, cacheKey]);
+  }, [desde, hasta, cacheKey, year, month, initialEventsByMonth]);
 
   const getEventsForDate = useMemo(() => {
     const alerts = events.filter((e): e is CalendarEvent & { kind: 'alerta' } => e.kind === 'alerta');

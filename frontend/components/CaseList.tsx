@@ -12,11 +12,13 @@ interface CaseListProps {
   onSelectCase: (lawCase: LawCase) => void | Promise<void>;
   onViewChange: (view: ViewState) => void;
   onLoadCases: (filters?: api.CasesListFilters, page?: number) => Promise<void>;
+  /** Precarga el detalle del expediente al pasar el ratón para abrir la ficha más rápido. */
+  onCaseMouseEnter?: (lawCase: LawCase) => void;
   clientesProp?: Cliente[];
   tagsProp?: CaseTag[];
 }
 
-const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSelectCase, onViewChange, onLoadCases, clientesProp, tagsProp }) => {
+const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSelectCase, onViewChange, onLoadCases, onCaseMouseEnter, clientesProp, tagsProp }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [abogadoFilter, setAbogadoFilter] = useState('');
@@ -308,7 +310,11 @@ const CaseList: React.FC<CaseListProps> = ({ cases, casesCount, casesPage, onSel
               </tr>
             ) : (
               filteredCases.map(c => (
-              <tr key={c.id} className={`hover:bg-slate-50 transition-all group ${c.estado === CaseStatus.CLOSED ? 'opacity-60 grayscale' : ''}`}>
+              <tr
+                key={c.id}
+                onMouseEnter={() => onCaseMouseEnter?.(c)}
+                className={`hover:bg-slate-50 transition-all group ${c.estado === CaseStatus.CLOSED ? 'opacity-60 grayscale' : ''}`}
+              >
                 <td className="px-6 py-4">
                   <p className="text-xs font-black text-orange-600">{c.codigo_interno}</p>
                   <p className="text-[10px] font-mono text-slate-400">{c.nro_expediente}</p>

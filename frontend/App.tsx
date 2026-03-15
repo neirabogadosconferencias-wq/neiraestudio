@@ -8,7 +8,7 @@ import UserManagement from './components/UserManagement';
 import Login from './components/Login';
 import Toast from './components/Toast';
 import Calendar from './components/Calendar';
-import { LawCase, ViewState, User, ActuacionTemplate, CaseTag, Cliente, DashboardStats } from './types';
+import { LawCase, ViewState, User, ActuacionTemplate, CaseTag, Cliente, DashboardStats, CalendarEvent } from './types';
 import * as api from './services/apiService';
 
 interface ToastState {
@@ -29,6 +29,8 @@ const App: React.FC = () => {
   const [tags, setTags] = useState<CaseTag[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [dashboardStatsCache, setDashboardStatsCache] = useState<DashboardStats | null>(null);
+  const [calendarEventsCache, setCalendarEventsCache] = useState<Record<string, CalendarEvent[]>>({});
+  const [caseDetailCache, setCaseDetailCache] = useState<Record<string, LawCase>>({});
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ message, type });
@@ -107,6 +109,8 @@ const App: React.FC = () => {
     setTags([]);
     setClientes([]);
     setDashboardStatsCache(null);
+    setCalendarEventsCache({});
+    setCaseDetailCache({});
   };
 
   const preloadDashboardInProgress = useRef(false);
@@ -144,6 +148,51 @@ const App: React.FC = () => {
       });
   }, [cases.length, loadCases]);
 
+  const preloadCalendarInProgress = useRef(false);
+
+  const loadCalendarEventsForMonth = useCallback(async (y: number, m: number) => {
+    const desde = `${y}-${String(m).padStart(2, '0')}-01`;
+    const lastDay = new Date(y, m, 0).getDate();
+    const hasta = `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+    const data = await api.apiGetCalendarEvents(desde, hasta);
+    const monthKey = `${y}-${String(m).padStart(2, '0')}`;
+    setCalendarEventsCache((prev) => ({ ...prev, [monthKey]: data }));
+    return data;
+  }, []);
+
+  const safePreloadCalendar = useCallback(() => {
+    if (!currentUser) return;
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth() + 1;
+    const monthKey = `${y}-${String(m).padStart(2, '0')}`;
+    if (calendarEventsCache[monthKey]) return;
+    if (preloadCalendarInProgress.current) return;
+    preloadCalendarInProgress.current = true;
+    safePreloadCases();
+    loadCalendarEventsForMonth(y, m)
+      .catch(() => {})
+      .finally(() => {
+        preloadCalendarInProgress.current = false;
+      });
+  }, [currentUser, calendarEventsCache, loadCalendarEventsForMonth, safePreloadCases]);
+
+  const preloadCaseDetailIds = useRef<Set<string>>(new Set());
+
+  const safePreloadCaseDetail = useCallback((caseItem: LawCase) => {
+    const id = String(caseItem.id);
+    if (caseDetailCache[id]) return;
+    if (preloadCaseDetailIds.current.has(id)) return;
+    preloadCaseDetailIds.current.add(id);
+    api
+      .apiGetCase(id)
+      .then((full) => setCaseDetailCache((prev) => ({ ...prev, [id]: full })))
+      .catch(() => {})
+      .finally(() => {
+        preloadCaseDetailIds.current.delete(id);
+      });
+  }, [caseDetailCache]);
+
   const handleAddCase = async (newCaseData: Omit<LawCase, 'id' | 'codigo_interno' | 'updatedAt' | 'actuaciones' | 'alertas' | 'notas' | 'createdBy' | 'lastModifiedBy' | 'created_at' | 'updated_at'>) => {
     try {
       await api.apiCreateCase(newCaseData);
@@ -161,6 +210,7 @@ const App: React.FC = () => {
     if (selectedCase && String(selectedCase.id) === String(updatedCase.id)) {
       setSelectedCase(updatedCase);
     }
+    setCaseDetailCache(prev => ({ ...prev, [String(updatedCase.id)]: updatedCase }));
     showToast('Expediente actualizado exitosamente', 'success');
   };
 
@@ -174,6 +224,11 @@ const App: React.FC = () => {
       setCasesCount(prev => Math.max(0, prev - 1));
       setCurrentView('cases');
       setSelectedCase(null);
+      setCaseDetailCache(prev => {
+        const next = { ...prev };
+        delete next[String(id)];
+        return next;
+      });
       showToast('Expediente eliminado exitosamente', 'success');
     } catch (error: any) {
       console.error('Error al eliminar caso:', error);
@@ -224,6 +279,7 @@ const App: React.FC = () => {
             onSelectCase={navigateToCase}
             onViewChange={setCurrentView}
             onLoadCases={loadCases}
+            onCaseMouseEnter={safePreloadCaseDetail}
             clientesProp={clientes}
             tagsProp={tags}
           />
@@ -233,7 +289,8 @@ const App: React.FC = () => {
       case 'case-detail':
         return selectedCase ? (
           <CaseDetail
-            lawCase={selectedCase}
+            key={selectedCase.id}
+            lawCase={caseDetailCache[String(selectedCase.id)] || selectedCase}
             currentUser={currentUser}
             templates={templates}
             tags={tags}
@@ -250,6 +307,7 @@ const App: React.FC = () => {
             onSelectCase={navigateToCase}
             onViewChange={setCurrentView}
             onLoadCases={loadCases}
+            onCaseMouseEnter={safePreloadCaseDetail}
             clientesProp={clientes}
             tagsProp={tags}
           />
@@ -257,7 +315,14 @@ const App: React.FC = () => {
       case 'users':
         return <UserManagement currentUser={currentUser} />;
       case 'calendar':
-        return <Calendar cases={cases} onSelectCase={navigateToCase} onViewChange={setCurrentView} />;
+        return (
+          <Calendar
+            cases={cases}
+            onSelectCase={navigateToCase}
+            onViewChange={setCurrentView}
+            initialEventsByMonth={calendarEventsCache}
+          />
+        );
       default:
         return (
           <Dashboard
@@ -288,6 +353,7 @@ const App: React.FC = () => {
         currentUser={currentUser}
         onPreloadCases={cases.length === 0 ? safePreloadCases : undefined}
         onPreloadDashboard={!dashboardStatsCache ? safePreloadDashboard : undefined}
+        onPreloadCalendar={currentUser ? safePreloadCalendar : undefined}
       >
         {renderView()}
       </Layout>
