@@ -4,12 +4,13 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from .views import (
     AuthView, CurrentUserView, AssignableUsersView,
-    DashboardView, DashboardAlertasView, CalendarEventsView,
+    DashboardView, DashboardAlertasView, DashboardActivitiesView, CalendarEventsView,
+    ExportActivitiesView,
     UserViewSet, LawCaseViewSet,
     CaseActuacionViewSet, CaseAlertaViewSet, CaseNoteViewSet,
     UserStickyNoteViewSet, UserCalendarEventViewSet,
     ClienteViewSet, CaseTagViewSet, ActuacionTemplateViewSet,
-    AvisoViewSet
+    AvisoViewSet, CaseActivityLogViewSet
 )
 
 router = DefaultRouter()
@@ -35,6 +36,8 @@ urlpatterns = [
     # Dashboard
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
     path('dashboard/alertas/', DashboardAlertasView.as_view(), name='dashboard-alertas'),
+    path('dashboard/activities/', DashboardActivitiesView.as_view(), name='dashboard-activities'),
+    path('dashboard/export-activities/', ExportActivitiesView.as_view(), name='export-activities'),
     path('calendar/events/', CalendarEventsView.as_view(), name='calendar-events'),
     
     # Routers

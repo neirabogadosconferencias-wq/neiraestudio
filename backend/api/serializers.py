@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import authenticate
-from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, Aviso, UserStickyNote, UserCalendarEvent
+from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, Aviso, UserStickyNote, UserCalendarEvent, CaseActivityLog
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -548,3 +548,32 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         
         instance.save()
         return instance
+
+
+class CaseActivityLogSerializer(serializers.ModelSerializer):
+    user_username = serializers.SerializerMethodField()
+    action_display = serializers.SerializerMethodField()
+    caso = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = CaseActivityLog
+        fields = [
+            'id', 'action', 'action_display', 'entity_type', 'entity_id', 'caso_id',
+            'caso', 'field_changed', 'old_value', 'new_value', 'description',
+            'user_username', 'created_at'
+        ]
+    
+    def get_user_username(self, obj):
+        return obj.user.username if obj.user else 'Sistema'
+    
+    def get_action_display(self, obj):
+        return obj.get_action_display()
+    
+    def get_caso(self, obj):
+        if obj.caso:
+            return {
+                'id': obj.caso.id,
+                'codigo_interno': obj.caso.codigo_interno,
+                'caratula': obj.caso.caratula,
+            }
+        return None

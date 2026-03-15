@@ -14,7 +14,7 @@ import re
 from datetime import datetime, timedelta
 import json
 
-from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, Aviso, UserStickyNote, UserCalendarEvent
+from .models import User, LawCase, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, Aviso, UserStickyNote, UserCalendarEvent, CaseActivityLog
 from .serializers import (
     UserSerializer, UserCreateSerializer, UserUpdateSerializer,
     LawCaseSerializer, LawCaseListSerializer, DashboardRecentCaseSerializer,
@@ -24,7 +24,7 @@ from .serializers import (
     AvisoSerializer, LoginSerializer,
     CalendarEventAlertaSerializer, CalendarEventActuacionSerializer,
     CalendarEventPersonalSerializer, UserCalendarEventSerializer,
-    UserStickyNoteSerializer
+    UserStickyNoteSerializer, CaseActivityLogSerializer
 )
 
 
@@ -787,11 +787,14 @@ class DashboardView(APIView):
         open_c = stats_agg['open_cases'] or 0
         closed = stats_agg['closed_cases'] or 0
         fuero_json = dict(cases.values('fuero').annotate(cnt=Count('id')).values_list('fuero', 'cnt'))
-        # Stats por abogado: usar Subquery para evitar materializar lista de IDs (escalable con muchos casos)
-        cases_subquery_ids = cases.only('id').order_by().values('id')
+        # ---- Stats por abogado: usar Subquery para evitar materializar lista de IDs (escalable con muchos casos) ----
+        cases_subquery_ids = Subquery(cases.only('id').order_by().values('id'))
+        cases_ids_list = list(cases.only('id').values_list('id', flat=True))
+        cases_subquery_ids_list = cases_subquery_ids
+        
         abogado_rows = (
             LawCase.abogados_asignados.through.objects
-            .filter(lawcase_id__in=Subquery(cases_subquery_ids))
+            .filter(lawcase_id__in=cases_ids_list)
             .values('user__username')
             .annotate(cnt=Count('id'))
             .values_list('user__username', 'cnt')
@@ -801,7 +804,7 @@ class DashboardView(APIView):
         month_json = {r['mes'].strftime('%Y-%m'): r['cnt'] for r in month_rows if r['mes']}
 
         # ---- Horas trabajadas: sumar tiempo_estimado_minutos de alertas ----
-        alertas_base = CaseAlerta.objects.filter(caso_id__in=Subquery(cases_subquery_ids))
+        alertas_base = CaseAlerta.objects.filter(caso_id__in=cases_ids_list)
         horas_cumplidas = alertas_base.filter(cumplida=True).aggregate(
             t=Coalesce(Sum('tiempo_estimado_minutos'), 0)
         )['t'] or 0
@@ -834,13 +837,51 @@ class DashboardView(APIView):
         recent_cases = (
             cases.only('id', 'codigo_interno', 'caratula', 'updated_at', 'last_modified_by')
             .select_related('last_modified_by')
-        )[:5]
+        )[:20]
 
         # Sticky notes del usuario (evita petición separada desde el frontend)
         sticky_notes_qs = UserStickyNote.objects.filter(user=request.user).order_by(
             'orden', '-fecha_recordatorio', '-created_at'
         )
         sticky_notes_data = UserStickyNoteSerializer(sticky_notes_qs, many=True).data
+
+        # Eventos de HOY para el calendario (alertas, actuaciones, personales)
+        today = timezone.now().date()
+        today_alertas = (
+            CaseAlerta.objects.filter(caso_id__in=cases_ids_list)
+            .filter(fecha_vencimiento=today)
+            .select_related('caso')
+            .order_by('hora')
+        )
+        today_actuaciones = (
+            CaseActuacion.objects.filter(caso_id__in=cases_ids_list)
+            .filter(fecha=today)
+            .select_related('caso')
+            .order_by('fecha')
+        )
+        today_personales = (
+            UserCalendarEvent.objects.filter(user=request.user)
+            .filter(fecha=today)
+            .order_by('hora')
+        )
+
+        from .serializers import CalendarEventAlertaSerializer, CalendarEventActuacionSerializer, CalendarEventPersonalSerializer
+
+        today_events_serialized = []
+        for e in today_alertas:
+            today_events_serialized.append(CalendarEventAlertaSerializer(e).data)
+        for e in today_actuaciones:
+            today_events_serialized.append(CalendarEventActuacionSerializer(e).data)
+        for e in today_personales:
+            today_events_serialized.append(CalendarEventPersonalSerializer(e).data)
+
+        # Actividades recientes (trazabilidad): solo 10 iniciales; el resto vía /dashboard/activities/
+        activities_qs = (
+            CaseActivityLog.objects.filter(caso_id__in=cases_ids_list)
+            .select_related('user', 'caso')
+            .order_by('-created_at')[:10]
+        )
+        activities_data = CaseActivityLogSerializer(activities_qs, many=True).data
 
         data = {
             'stats': stats,
@@ -851,8 +892,111 @@ class DashboardView(APIView):
             'stats_by_abogado': stats_by_abogado,
             'aviso': aviso_data,
             'sticky_notes': sticky_notes_data,
+            'today_events': today_events_serialized,
+            'recent_activities': activities_data,
         }
         return Response(data)
+
+
+class DashboardActivitiesView(APIView):
+    """Actividades del dashboard paginadas (lazy loading). Misma lógica que DashboardView."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from rest_framework.pagination import PageNumberPagination
+
+        page = int(request.query_params.get('page', 1))
+        page_size = 10
+        cases = DashboardView._get_cases_queryset_for_user(request)
+        cases_ids_list = list(cases.only('id').values_list('id', flat=True))
+        activities_qs = (
+            CaseActivityLog.objects.filter(caso_id__in=cases_ids_list)
+            .select_related('user', 'caso')
+            .order_by('-created_at')
+        )
+        paginator = PageNumberPagination()
+        paginator.page_size = page_size
+        paginator.page_size_query_param = None
+        page_qs = paginator.paginate_queryset(activities_qs, request)
+        return paginator.get_paginated_response(
+            CaseActivityLogSerializer(page_qs, many=True).data
+        )
+
+
+class ExportActivitiesView(APIView):
+    """Exportar todas las actividades (trazabilidad) a Excel. Solo admin."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        if not request.user.is_admin:
+            return Response(
+                {'detail': 'Solo administradores pueden exportar'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        except ImportError:
+            return Response(
+                {'error': 'openpyxl no está instalado'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        cases = DashboardView._get_cases_queryset_for_user(request)
+        cases_ids_list = list(cases.only('id').values_list('id', flat=True))
+
+        activities = CaseActivityLog.objects.filter(
+            caso_id__in=cases_ids_list
+        ).select_related('user', 'caso').order_by('-created_at')
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Trazabilidad"
+
+        header_fill = PatternFill(start_color="FF6600", end_color="FF6600", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF", size=11)
+        thin_border = Border(
+            left=Side(style='thin'), right=Side(style='thin'),
+            top=Side(style='thin'), bottom=Side(style='thin')
+        )
+
+        headers = ['Expediente', 'Carátula', 'Acción', 'Entidad', 'Descripción', 'Usuario', 'Fecha', 'Hora']
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal='center')
+
+        action_labels = {'create': 'Crear', 'update': 'Editar', 'delete': 'Eliminar', 'toggle': 'Cambiar'}
+        entity_labels = {
+            'CaseActuacion': 'Actuación', 'CaseAlerta': 'Alerta',
+            'CaseNote': 'Nota', 'Cliente': 'Cliente', 'LawCase': 'Expediente'
+        }
+
+        for row_num, activity in enumerate(activities, 2):
+            ws.cell(row=row_num, column=1, value=activity.caso.codigo_interno if activity.caso else '-')
+            ws.cell(row=row_num, column=2, value=activity.caso.caratula if activity.caso else '-')
+            ws.cell(row=row_num, column=3, value=action_labels.get(activity.action, activity.action))
+            ws.cell(row=row_num, column=4, value=entity_labels.get(activity.entity_type, activity.entity_type))
+            ws.cell(row=row_num, column=5, value=activity.description)
+            ws.cell(row=row_num, column=6, value=activity.user.username if activity.user else 'Sistema')
+            ws.cell(row=row_num, column=7, value=activity.created_at.strftime('%d/%m/%Y') if activity.created_at else '-')
+            ws.cell(row=row_num, column=8, value=activity.created_at.strftime('%H:%M') if activity.created_at else '-')
+
+            for col in range(1, 9):
+                ws.cell(row=row_num, column=col).border = thin_border
+
+        for col in range(1, 9):
+            ws.column_dimensions[chr(64 + col)].width = 20
+
+        response = HttpResponse(
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = 'attachment; filename=trazabilidad.xlsx'
+        wb.save(response)
+        return response
 
 
 class CalendarEventsView(APIView):
@@ -948,3 +1092,24 @@ class DashboardAlertasView(APIView):
         return paginator.get_paginated_response(
             DashboardAlertaSerializer(page_qs, many=True).data
         )
+
+
+class CaseActivityLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """Solo lectura - historial de actividades de un caso"""
+    serializer_class = CaseActivityLogSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        from .models import LawCase
+        caso_id = self.kwargs.get('case_pk')
+        
+        if not caso_id:
+            return CaseActivityLog.objects.none()
+        
+        cases = DashboardView._get_cases_queryset_for_user(self.request)
+        if not cases.filter(pk=caso_id).exists():
+            return CaseActivityLog.objects.none()
+        
+        return CaseActivityLog.objects.filter(
+            caso_id=caso_id
+        ).select_related('user', 'caso').order_by('-created_at')

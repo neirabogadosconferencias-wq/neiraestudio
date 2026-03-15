@@ -11,6 +11,9 @@ interface CalendarProps {
 }
 
 const normalizeDate = (dateInput: string | Date): string => {
+  if (typeof dateInput === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
+    return dateInput;
+  }
   const date = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
   if (isNaN(date.getTime())) return '';
   const y = date.getFullYear();
@@ -260,64 +263,45 @@ const Calendar: React.FC<CalendarProps> = ({ cases: casesProp = [], onSelectCase
                       <span className={`text-xs font-bold ${isCurrentDay ? 'bg-orange-500 text-white px-2 py-0.5 rounded' : ''}`}>
                         {day.date.getDate()}
                       </span>
-                      {(hasAlerts || hasActuaciones || hasPersonales) && (
-                        <div className="flex gap-1">
-                          {hasAlerts && (
-                            <div className="flex gap-0.5">
-                              {dayEvents.alerts.slice(0, 3).map((alerta, idx) => (
-                                <div
-                                  key={alerta.id}
-                                  className={`w-1.5 h-1.5 rounded-full ${
-                                    (alerta as { cumplida?: boolean }).cumplida
-                                      ? 'bg-slate-300'
-                                      : getUrgencyColor(getEventFecha(alerta))
-                                  }`}
-                                  title={alerta.titulo}
-                                />
-                              ))}
-                              {dayEvents.alerts.length > 3 && (
-                                <span className="text-[8px] font-black text-slate-400">+{dayEvents.alerts.length - 3}</span>
-                              )}
-                            </div>
-                          )}
-                          {hasActuaciones && (
-                            <div className="w-1.5 h-1.5 rounded-full bg-blue-500" title={`${dayEvents.actuaciones.length} actuación(es)`} />
-                          )}
-                          {hasPersonales && (
-                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" title={`${dayEvents.personales.length} evento(s)`} />
-                          )}
+                      {hasAnyEvents && (
+                        <span className="text-[8px] font-bold text-slate-400 bg-slate-100 px-1 rounded">
+                          {dayEvents.alerts.length + dayEvents.actuaciones.length + dayEvents.personales.length}
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-0.5">
+                      {[...dayEvents.alerts, ...dayEvents.actuaciones, ...dayEvents.personales].slice(0, 2).map((ev) => (
+                        <div
+                          key={ev.kind + ev.id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEventModal(ev);
+                          }}
+                          className={`text-[8px] px-1 py-0.5 rounded font-bold truncate cursor-pointer hover:opacity-80 ${
+                            ev.kind === 'alerta' && (ev as { cumplida?: boolean }).cumplida
+                              ? 'bg-slate-100 text-slate-500'
+                              : ev.kind === 'alerta'
+                                ? 'bg-red-50 text-red-700'
+                                : ev.kind === 'personal'
+                                  ? 'bg-emerald-50 text-emerald-700'
+                                  : 'bg-blue-50 text-blue-700'
+                          }`}
+                        >
+                          {ev.hora ? `${ev.hora.slice(0,5)} ` : ''}{ev.titulo}
+                        </div>
+                      ))}
+                      {dayEvents.alerts.length + dayEvents.actuaciones.length + dayEvents.personales.length > 2 && (
+                        <div 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedDate(day.date);
+                          }}
+                          className="text-[8px] text-orange-600 font-bold cursor-pointer hover:underline"
+                        >
+                          +{dayEvents.alerts.length + dayEvents.actuaciones.length + dayEvents.personales.length - 2} más
                         </div>
                       )}
                     </div>
-                    {isSelectedDay && hasAnyEvents && (
-                      <div className="mt-2 space-y-1">
-                        {[...dayEvents.alerts, ...dayEvents.actuaciones, ...dayEvents.personales].slice(0, 2).map((ev) => (
-                          <div
-                            key={ev.kind + ev.id}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openEventModal(ev);
-                            }}
-                            className={`text-[9px] p-1 rounded font-bold truncate cursor-pointer hover:opacity-80 ${
-                              ev.kind === 'alerta' && (ev as { cumplida?: boolean }).cumplida
-                                ? 'bg-slate-100 text-slate-500'
-                                : ev.kind === 'alerta'
-                                  ? 'bg-red-50 text-red-700'
-                                  : ev.kind === 'personal'
-                                    ? 'bg-emerald-50 text-emerald-700'
-                                    : 'bg-blue-50 text-blue-700'
-                            }`}
-                          >
-                            {ev.titulo}
-                          </div>
-                        ))}
-                        {dayEvents.alerts.length + dayEvents.actuaciones.length + dayEvents.personales.length > 2 && (
-                          <div className="text-[8px] text-slate-400 font-bold">
-                            +{dayEvents.alerts.length + dayEvents.actuaciones.length + dayEvents.personales.length - 2} más
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
                 );
               })}

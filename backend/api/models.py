@@ -339,3 +339,35 @@ class CaseNote(models.Model):
     
     def __str__(self):
         return f"{self.titulo} - {self.caso.codigo_interno}"
+
+
+class CaseActivityLog(models.Model):
+    """Log de todas las acciones realizadas en/expedientes"""
+    
+    class ActionType(models.TextChoices):
+        CREATE = 'create', 'Crear'
+        UPDATE = 'update', 'Actualizar'
+        DELETE = 'delete', 'Eliminar'
+        TOGGLE = 'toggle', 'Cambiar estado'
+    
+    caso = models.ForeignKey(LawCase, on_delete=models.CASCADE, related_name='activity_logs')
+    action = models.CharField(max_length=20, choices=ActionType.choices)
+    entity_type = models.CharField(max_length=30)
+    entity_id = models.PositiveIntegerField()
+    field_changed = models.CharField(max_length=50, null=True, blank=True)
+    old_value = models.TextField(null=True, blank=True)
+    new_value = models.TextField(null=True, blank=True)
+    description = models.TextField()
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='activity_logs')
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['caso', '-created_at']),
+            models.Index(fields=['entity_type', 'entity_id']),
+            models.Index(fields=['user', '-created_at']),
+        ]
+    
+    def __str__(self):
+        return f"{self.action} - {self.entity_type} - {self.caso.codigo_interno}"

@@ -212,6 +212,7 @@ const App: React.FC = () => {
             onUpdateCase={handleUpdateCase}
             initialStats={dashboardStatsCache}
             onStatsLoaded={setDashboardStatsCache}
+            currentUser={currentUser}
           />
         );
       case 'cases':

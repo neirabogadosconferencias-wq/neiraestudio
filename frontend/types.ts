@@ -170,6 +170,8 @@ export interface DashboardStats {
   alertas: CaseAlerta[];
   aviso?: Aviso;
   sticky_notes?: UserStickyNote[];
+  today_events?: CalendarEvent[];
+  recent_activities?: CaseActivityLog[];
 }
 
 export type ViewState = 'dashboard' | 'cases' | 'new-case' | 'case-detail' | 'users' | 'calendar' | 'clientes';
@@ -248,4 +250,24 @@ export interface UserStickyNote {
   orden: number;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface CaseActivityLog {
+  id: number;
+  action: 'create' | 'update' | 'delete' | 'toggle';
+  action_display: string;
+  entity_type: string;
+  entity_id: number;
+  caso_id?: number;
+  caso?: {
+    id: number;
+    codigo_interno: string;
+    caratula: string;
+  };
+  field_changed?: string | null;
+  old_value?: string | null;
+  new_value?: string | null;
+  description: string;
+  user_username: string;
+  created_at: string;
 }

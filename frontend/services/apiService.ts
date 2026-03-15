@@ -1,4 +1,4 @@
-import { LawCase, User, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, DashboardStats, CalendarEvent, UserStickyNote, UserCalendarEvent, Aviso } from '../types';
+import { LawCase, User, CaseActuacion, CaseAlerta, CaseNote, Cliente, CaseTag, ActuacionTemplate, DashboardStats, CalendarEvent, UserStickyNote, UserCalendarEvent, Aviso, CaseActivityLog } from '../types';
 
 // Normalizar para evitar dobles slashes (ej: /api//auth/login/)
 const RAW_API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
@@ -235,7 +235,7 @@ export const apiGetCases = async (
   if (filters?.fecha_modificacion_desde) params.append('fecha_modificacion_desde', filters.fecha_modificacion_desde);
   if (filters?.fecha_modificacion_hasta) params.append('fecha_modificacion_hasta', filters.fecha_modificacion_hasta);
   params.append('page', String(page));
-  params.append('page_size', '15');
+  params.append('page_size', '10');
   params.append('include_clientes', '1');
 
   const result = await apiRequest<any>(`/cases/?${params.toString()}`);
@@ -686,4 +686,15 @@ export const apiGetAlertasPaginated = async (page: number): Promise<{ results: C
     results: result.results || [],
     next: result.next,
   };
+};
+
+/** Actividades del dashboard paginadas (lazy loading). Página 1 = primeras 10 (ya vienen en dashboard); usar page≥2 para "cargar más". */
+export const apiGetDashboardActivities = async (page: number): Promise<{ results: CaseActivityLog[]; next: string | null }> => {
+  const result = await apiRequest<{ results: CaseActivityLog[]; next: string | null }>(`/dashboard/activities/?page=${page}`);
+  return { results: result.results || [], next: result.next ?? null };
+};
+
+/** Actividades de un caso específico (trazabilidad) */
+export const apiGetCaseActivities = async (caseId: string): Promise<CaseActivityLog[]> => {
+  return await apiRequest<CaseActivityLog[]>(`/cases/${caseId}/activities/`);
 };
